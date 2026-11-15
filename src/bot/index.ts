@@ -23,6 +23,7 @@ import { normalizeRichMessage } from "./handlers/rich-message-handler.js";
 import { authMiddleware } from "./middleware/auth.js";
 import { interactionGuardMiddleware } from "./middleware/interaction-guard.js";
 import { staleUpdateMiddleware } from "./middleware/stale-update.js";
+import { topicScopeMiddleware } from "./middleware/topic-scope.js";
 import {
   ensureCommandsInitialized,
   registerCommandRouter,
@@ -216,6 +217,7 @@ export function createBot(
   bot.use((ctx, next) => ensureCommandsInitialized(ctx, next, localCommandRegistry));
   const guardDeps = { ...container, localCommandRegistry };
   bot.use((ctx, next) => interactionGuardMiddleware(ctx, next, guardDeps));
+  bot.use(topicScopeMiddleware);
 
   registerCommandRouter(bot, { container, localCommandRegistry });
   registerCallbackRouter(bot, { container });

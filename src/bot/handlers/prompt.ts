@@ -43,6 +43,7 @@ import {
 } from "../../app/services/model-capabilities-service.js";
 import type { IncomingPrompt } from "../../app/types/prompt.js";
 import type { HandoverSelection } from "../../app/managers/prompt-handover-manager.js";
+import { getTopicScope } from "../middleware/topic-scope.js";
 
 /** Module-level references for async callbacks that don't have ctx. */
 let botInstance: Bot<Context> | null = null;
@@ -213,10 +214,17 @@ export async function processUserPrompt(
   botInstance = bot;
   chatIdInstance = ctx.chat!.id;
 
-  let currentSession = getCurrentSession();
+  // A forum topic bound to a session wins over the chat's global session; unbound
+  // topics and General set no scope, so the previous behaviour is unchanged.
+  const topicScope = getTopicScope(ctx);
+  let currentSession = topicScope
+    ? { id: topicScope.sessionId, title: topicScope.title, directory: topicScope.directory }
+    : getCurrentSession();
   let createdNewSession = false;
 
-  if (currentSession && currentSession.directory !== currentProject.worktree) {
+  // A topic owns its session's directory, so it is not a "mismatch" against the
+  // chat's currently selected project — that check only applies to the global session.
+  if (!topicScope && currentSession && currentSession.directory !== currentProject.worktree) {
     logger.warn(
       `[Bot] Session/project mismatch detected. sessionDirectory=${currentSession.directory}, projectDirectory=${currentProject.worktree}. Resetting session context.`,
     );
@@ -603,7 +611,12 @@ export async function admitPromptToInbox(
   deps: ProcessPromptDeps,
   delivery: V2InboxDelivery,
 ): Promise<{ sessionId: string; inboxId: string } | null> {
-  const currentSession = getCurrentSession();
+  // A forum topic bound to a session wins over the chat's global session, exactly as in
+  // processUserPrompt; otherwise a busy-time prompt would land in another session's inbox.
+  const topicScope = getTopicScope(ctx);
+  const currentSession = topicScope
+    ? { id: topicScope.sessionId, title: topicScope.title, directory: topicScope.directory }
+    : getCurrentSession();
   if (!currentSession) {
     logger.warn("[Bot] Cannot send a prompt to the inbox: no current session");
     await ctx.reply(t("bot.prompt_send_error"));
