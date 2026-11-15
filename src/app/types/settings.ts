@@ -2,6 +2,7 @@ import type { ModelInfo } from "./model.js";
 import type { ProjectInfo } from "./project.js";
 import type { SessionDirectoryCacheInfo, SessionInfo } from "./session.js";
 import type { ScheduledTask } from "./scheduled-task.js";
+import type { TopicSessionBinding } from "./topics.js";
 
 export type ResponseStreamingMode = "edit" | "draft";
 
@@ -57,4 +58,6 @@ export interface Settings {
   scheduledTaskSessionIgnores?: ScheduledTaskSessionIgnoreInfo[] | undefined;
   sessionReplyReadState?: SessionReplyReadState | undefined;
   lastTodoSnapshot?: TodoSnapshotInfo | undefined;
+  /** Topic session bindings keyed by "<chatId>:<threadId>". */
+  topicSessionBindings?: Record<string, TopicSessionBinding> | undefined;
 }

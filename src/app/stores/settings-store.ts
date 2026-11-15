@@ -11,6 +11,7 @@ import type {
   Settings,
   TodoSnapshotInfo,
 } from "../types/settings.js";
+import type { TopicSessionBinding } from "../types/topics.js";
 import { config } from "../../config.js";
 import { getRuntimePaths } from "../../runtime/paths.js";
 import { logger } from "../../utils/logger.js";
@@ -38,6 +39,15 @@ function cloneSessionReplyReadState(
       ]),
     ),
   };
+}
+
+function cloneTopicSessionBindings(
+  bindings: Record<string, TopicSessionBinding> | undefined,
+): Record<string, TopicSessionBinding> | undefined {
+  if (!bindings) return undefined;
+  return Object.fromEntries(
+    Object.entries(bindings).map(([key, binding]) => [key, { ...binding }]),
+  );
 }
 
 function getSettingsFilePath(): string {
@@ -400,6 +410,17 @@ export function getSessionReplyReadState(): SessionReplyReadState | undefined {
 
 export function setSessionReplyReadState(state: SessionReplyReadState): Promise<void> {
   currentSettings.sessionReplyReadState = cloneSessionReplyReadState(state);
+  return writeSettingsFile(currentSettings);
+}
+
+export function getTopicSessionBindings(): Record<string, TopicSessionBinding> {
+  return cloneTopicSessionBindings(currentSettings.topicSessionBindings) ?? {};
+}
+
+export function setTopicSessionBindings(
+  bindings: Record<string, TopicSessionBinding>,
+): Promise<void> {
+  currentSettings.topicSessionBindings = cloneTopicSessionBindings(bindings);
   return writeSettingsFile(currentSettings);
 }
 
