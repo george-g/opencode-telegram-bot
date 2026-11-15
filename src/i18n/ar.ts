@@ -226,6 +226,8 @@ export const ar: I18nDictionary = {
   "sessions.loading_context": "⏳ جارٍ تحميل السياق وأحدث الرسائل...",
   "sessions.selected": "✅ تم اختيار الجلسة: {title}",
   "sessions.select_error": "🔴 تعذر اختيار الجلسة.",
+  "sessions.topic_create_failed":
+    "⚠️ تعذّر إنشاء موضوع المحادثة — تأكد من أن المجموعة منتدى ومن أن للبوت صلاحية إدارة المواضيع. سنواصل في هذه المحادثة دون موضوع.",
   "sessions.preview.empty": "لا توجد رسائل حديثة.",
   "sessions.last_input.title": "آخر إدخال للمستخدم:",
   "sessions.last_input.attachment": "مرفق",

@@ -228,6 +228,8 @@ export const tr: I18nDictionary = {
   "sessions.loading_context": "⏳ Bağlam ve son mesajlar yükleniyor...",
   "sessions.selected": "✅ Oturum seçildi: {title}",
   "sessions.select_error": "🔴 Oturum seçilemedi.",
+  "sessions.topic_create_failed":
+    "⚠️ Forum konusu oluşturulamadı — grubun bir forum olduğundan ve botun Konuları Yönet iznine sahip olduğundan emin ol. Bu sohbette konu olmadan devam ediyoruz.",
   "sessions.preview.empty": "Son mesaj yok.",
   "sessions.last_input.title": "Son kullanıcı girdisi:",
   "sessions.last_input.attachment": "ek",

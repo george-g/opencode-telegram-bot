@@ -236,6 +236,8 @@ export const fr: I18nDictionary = {
   "sessions.loading_context": "⏳ Chargement du contexte et des derniers messages...",
   "sessions.selected": "✅ Session sélectionnée : {title}",
   "sessions.select_error": "🔴 Impossible de sélectionner la session.",
+  "sessions.topic_create_failed":
+    "⚠️ Impossible de créer le sujet — vérifie que le groupe est un forum et que le bot a le droit de gérer les sujets. On continue dans ce chat sans sujet.",
   "sessions.preview.empty": "Aucun message récent.",
   "sessions.last_input.title": "Dernière entrée utilisateur :",
   "sessions.last_input.attachment": "pièce jointe",

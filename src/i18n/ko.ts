@@ -235,6 +235,8 @@ export const ko: I18nDictionary = {
   "sessions.loading_context": "⏳ 컨텍스트와 최근 메시지를 불러오는 중...",
   "sessions.selected": "✅ 세션 선택됨: {title}",
   "sessions.select_error": "🔴 세션 선택에 실패했습니다.",
+  "sessions.topic_create_failed":
+    "⚠️ 포럼 주제를 만들지 못했습니다 — 그룹이 포럼이고 봇에게 주제 관리 권한이 있는지 확인하세요. 주제 없이 이 채팅에서 계속합니다.",
   "sessions.preview.empty": "최근 메시지가 없습니다.",
   "sessions.last_input.title": "마지막 사용자 입력:",
   "sessions.last_input.attachment": "첨부 파일",

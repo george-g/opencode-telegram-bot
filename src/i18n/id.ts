@@ -232,6 +232,8 @@ export const id: I18nDictionary = {
   "sessions.loading_context": "⏳ Memuat konteks dan pesan terbaru...",
   "sessions.selected": "✅ Sesi dipilih: {title}",
   "sessions.select_error": "🔴 Gagal memilih sesi.",
+  "sessions.topic_create_failed":
+    "⚠️ Gagal membuat topik forum — pastikan grup ini adalah forum dan bot memiliki izin Mengelola Topik. Kami lanjutkan di chat ini tanpa topik.",
   "sessions.preview.empty": "Tidak ada pesan terbaru.",
   "sessions.last_input.title": "Input pengguna terakhir:",
   "sessions.last_input.attachment": "lampiran",
