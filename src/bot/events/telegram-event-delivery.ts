@@ -18,10 +18,99 @@ type RenderedSendOptions = Parameters<typeof sendRenderedBotPart>[0]["options"];
 type RenderedEditOptions = Parameters<typeof editRenderedBotPart>[0]["options"];
 type DraftCompleteOptions = Parameters<typeof completeDraftPart>[0]["options"];
 
+/**
+ * editMessageText has no topic in its typed payload: the topic is implied by
+ * the message being edited, so grammY exposes message_thread_id on the send
+ * methods but not here. The delivery still forwards it for bound topics.
+ */
+type EditMessageTextOptions = NonNullable<Parameters<TelegramApi["editMessageText"]>[3]> & {
+  message_thread_id?: number;
+};
+
 /** Where a session's messages go. */
 export interface TelegramDestination {
   api: TelegramApi;
   chatId: number;
+  /**
+   * The forum topic the session's chat belongs to, when it is bound to one.
+   * Absent for every chat that is not a bound topic, which keeps the plain
+   * chat send untouched.
+   */
+  messageThreadId?: number;
+}
+
+/**
+ * Adds the destination's topic to a Telegram options object, but only when the
+ * destination names one: an unbound chat keeps exactly the options it had.
+ */
+function withMessageThread<T extends object>(
+  options: T | undefined,
+  destination: TelegramDestination,
+): T | undefined {
+  const threadId = destination.messageThreadId;
+  if (threadId === undefined) {
+    return options;
+  }
+
+  return { ...(options ?? {}), message_thread_id: threadId } as T;
+}
+
+/**
+ * A draft send with the destination's topic. grammY types sendMessageDraft /
+ * sendRichMessageDraft with message_thread_id, but the shared helpers in
+ * telegram-text.ts do not forward an options object, so the delivery issues the
+ * call itself when (and only when) the destination is bound to a topic.
+ */
+async function sendDraftPartWithThread(
+  destination: TelegramDestination,
+  draftId: number,
+  part: TelegramRenderedPart,
+): Promise<{ deliveredSignature: string }> {
+  const threadId = destination.messageThreadId;
+  if (threadId === undefined) {
+    return sendDraftBotPart({
+      api: destination.api,
+      chatId: destination.chatId,
+      draftId,
+      part,
+    });
+  }
+
+  const api = destination.api as unknown as DraftApiWithThread;
+  const messageThreadId = { message_thread_id: threadId };
+  if (part.source === "plain" || part.blocks.length === 0) {
+    await api.sendMessageDraft(destination.chatId, draftId, part.fallbackText, messageThreadId);
+    return {
+      deliveredSignature: getTelegramRenderedPartSignature({
+        blocks: [],
+        fallbackText: part.fallbackText,
+        source: "plain",
+      }),
+    };
+  }
+
+  await api.sendRichMessageDraft(
+    destination.chatId,
+    draftId,
+    { blocks: part.blocks },
+    messageThreadId,
+  );
+  return { deliveredSignature: getTelegramRenderedPartSignature(part) };
+}
+
+interface DraftApiWithThread {
+  sendMessageDraft(
+    chatId: number,
+    draftId: number,
+    text: string,
+    options: { message_thread_id: number },
+  ): Promise<unknown>;
+  sendRichMessageDraft(
+    chatId: number,
+    draftId: number,
+    richMessage: { blocks: TelegramRenderedPart["blocks"] },
+    options: { message_thread_id: number },
+  ): Promise<unknown>;
 }
 
 /**
@@ -62,15 +151,22 @@ export class TelegramEventDelivery {
     text: string,
     options?: SendMessageOptions,
   ): Promise<number> {
-    const sentMessage = options
-      ? await destination.api.sendMessage(destination.chatId, text, options)
-      : await destination.api.sendMessage(destination.chatId, text);
+    const threadOptions = withMessageThread(options, destination);
+    const sentMessage =
+      threadOptions === undefined
+        ? await destination.api.sendMessage(destination.chatId, text)
+        : await destination.api.sendMessage(destination.chatId, text, threadOptions);
     return sentMessage.message_id;
   }
 
   async editText(destination: TelegramDestination, messageId: number, text: string): Promise<void> {
+    const options = withMessageThread<EditMessageTextOptions>(undefined, destination);
     try {
-      await destination.api.editMessageText(destination.chatId, messageId, text);
+      if (options === undefined) {
+        await destination.api.editMessageText(destination.chatId, messageId, text);
+      } else {
+        await destination.api.editMessageText(destination.chatId, messageId, text, options);
+      }
     } catch (error) {
       if (isMessageNotModifiedError(error)) {
         return;
@@ -102,10 +198,13 @@ export class TelegramEventDelivery {
     await destination.api.sendDocument(
       destination.chatId,
       new InputFile(fileData.buffer, fileData.filename),
-      {
-        caption: fileData.caption,
-        ...options,
-      },
+      withMessageThread(
+        {
+          caption: fileData.caption,
+          ...options,
+        },
+        destination,
+      ),
     );
   }
 
@@ -119,7 +218,7 @@ export class TelegramEventDelivery {
       api: destination.api,
       chatId: destination.chatId,
       part,
-      options: { ...options, ...AGENT_TEXT_LINK_PREVIEW_OPTIONS },
+      options: withMessageThread({ ...options, ...AGENT_TEXT_LINK_PREVIEW_OPTIONS }, destination),
       ...(allowPlainFallback === undefined ? {} : { allowPlainFallback }),
     });
   }
@@ -136,7 +235,10 @@ export class TelegramEventDelivery {
         chatId: destination.chatId,
         messageId,
         part,
-        options: { ...options, ...AGENT_TEXT_LINK_PREVIEW_OPTIONS },
+        options: withMessageThread(
+          { ...options, ...AGENT_TEXT_LINK_PREVIEW_OPTIONS },
+          destination,
+        ),
         allowPlainFallback: false,
       });
     } catch (error) {
@@ -157,12 +259,7 @@ export class TelegramEventDelivery {
   }
 
   editDraftPart(destination: TelegramDestination, draftId: number, part: TelegramRenderedPart) {
-    return sendDraftBotPart({
-      api: destination.api,
-      chatId: destination.chatId,
-      draftId,
-      part,
-    });
+    return sendDraftPartWithThread(destination, draftId, part);
   }
 
   completeDraftPart(
@@ -174,7 +271,10 @@ export class TelegramEventDelivery {
       api: destination.api,
       chatId: destination.chatId,
       part,
-      options: { ...options, ...AGENT_TEXT_LINK_PREVIEW_OPTIONS },
+      options: withMessageThread(
+        { ...options, ...AGENT_TEXT_LINK_PREVIEW_OPTIONS },
+        destination,
+      ),
     });
   }
 

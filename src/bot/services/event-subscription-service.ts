@@ -3,6 +3,7 @@ import type { Event } from "@opencode-ai/sdk/v2";
 import { config } from "../../config.js";
 import { opencodeServerVersion } from "../../opencode/client.js";
 import { getCurrentSession } from "../../app/services/session-service.js";
+import { getTopicBindingBySession } from "../../app/stores/topic-binding-store.js";
 import { restorePendingInteractionsAfterReconnect } from "../../app/services/attach-service.js";
 import { reconcileInboxPrompts } from "../../app/services/prompt-inbox-service.js";
 import { logger } from "../../utils/logger.js";
@@ -90,8 +91,9 @@ class EventSubscriptionService implements BotEventSubscriptionService {
   private botInstance: Bot<Context> | null = null;
   private chatIdInstance: number | null = null;
   private readonly policy: SessionTargetPolicy = {
-    getDestination: () => this.getChatDestination(),
-    isForegroundSession: (sessionId) => getCurrentSession()?.id === sessionId,
+    getDestination: (sessionId) => this.getDestination(sessionId),
+    isForegroundSession: (sessionId) =>
+      getCurrentSession()?.id === sessionId || getTopicBindingBySession(sessionId) !== null,
   };
   private readonly runtime: SessionRuntimeState;
 
@@ -291,5 +293,24 @@ class EventSubscriptionService implements BotEventSubscriptionService {
     }
 
     return { api: this.botInstance.api, chatId: this.chatIdInstance };
+  }
+
+  /**
+   * The chat a session's messages go to. A session bound to a forum topic goes
+   * to that topic; every other session keeps the single chat the bot was
+   * started with, with no thread, exactly as before topics existed.
+   */
+  private getDestination(sessionId: string): TelegramDestination | null {
+    const base = this.getChatDestination();
+    if (!base) {
+      return null;
+    }
+
+    const binding = getTopicBindingBySession(sessionId);
+    return {
+      api: base.api,
+      chatId: binding?.chatId ?? base.chatId,
+      ...(binding ? { messageThreadId: binding.threadId } : {}),
+    };
   }
 }

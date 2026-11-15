@@ -73,8 +73,8 @@ export function createEventRouter({
     }
 
     const sessionId = getEventSessionId(event);
-    const attached = deps.attachManager.getSnapshot();
-    if (attached && sessionId === attached.sessionId && shouldMarkAttachedBusyFromEvent(event)) {
+    const attached = sessionId ? deps.attachManager.getSnapshotFor(sessionId) : null;
+    if (attached && shouldMarkAttachedBusyFromEvent(event)) {
       void markAttachedSessionBusy(attached.sessionId, deps);
     }
 
