@@ -7,7 +7,7 @@ import {
   getCurrentSession,
 } from "../../app/services/session-service.js";
 import { formatSessionTitle } from "../../app/formatters/session-title-formatter.js";
-import { detachAttachedSession } from "../../app/services/attach-service.js";
+import { detachAttachedSession, detachOneAttachedSession } from "../../app/services/attach-service.js";
 import { clearPromptResponseMode } from "../handlers/prompt.js";
 import { handOverPromptQueue } from "../handlers/prompt-handover.js";
 import { logger } from "../../utils/logger.js";
@@ -23,6 +23,7 @@ export type DetachCommandDeps = Pick<
   | "pinnedMessageManager"
   | "resetAggregator"
   | "resetInteractions"
+  | "summaryAggregator"
 >;
 
 export async function detachCommand(
@@ -47,18 +48,35 @@ export async function detachCommand(
     // What waits for the running turn stays with the session: clearing it below then
     // finds nothing to withdraw.
     await handOverPromptQueue(currentSession);
-    detachAttachedSession("detach_command", deps);
+
+    // With several sessions attached, /detach disconnects only the current one: the
+    // others keep their output. A single attached session (the ordinary case) keeps
+    // the full reset that also drops the one dashboard and the followed-session
+    // aggregator; with none attached the reset stays a no-op, as before.
+    const attachedCount = deps.attachManager.listSnapshots().length;
+    // Read before the detach: removing the foreground hands it to another session,
+    // whose dashboard must then survive the clear below.
+    const disconnectedForeground =
+      deps.attachManager.getSnapshot()?.sessionId === currentSession.id;
+
+    if (attachedCount <= 1) {
+      detachAttachedSession("detach_command", deps);
+    } else {
+      detachOneAttachedSession(currentSession.id, "detach_command", deps);
+    }
     clearPromptResponseMode(currentSession.id);
     deps.foregroundSessionState.markIdle(currentSession.id);
     deps.assistantRunState.clearRun(currentSession.id, "detach_command");
     deps.resetInteractions("detach_command");
     clearSession();
 
-    if (deps.pinnedMessageManager.isInitialized()) {
-      try {
-        await deps.pinnedMessageManager.clear();
-      } catch (error) {
-        logger.error("[Detach] Failed to clear pinned message:", error);
+    if (attachedCount <= 1 || disconnectedForeground) {
+      if (deps.pinnedMessageManager.isInitialized()) {
+        try {
+          await deps.pinnedMessageManager.clear();
+        } catch (error) {
+          logger.error("[Detach] Failed to clear pinned message:", error);
+        }
       }
     }
 

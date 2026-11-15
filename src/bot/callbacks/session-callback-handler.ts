@@ -15,10 +15,15 @@ import { applySessionSettings } from "../../app/services/session-settings-servic
 import type { SessionInfo } from "../../app/types/session.js";
 import type { ProjectInfo } from "../../app/types/project.js";
 import { getCurrentProject, getCurrentSession } from "../../app/stores/settings-store.js";
+import {
+  getTopicBindingBySession,
+  registerTopicBinding,
+} from "../../app/stores/topic-binding-store.js";
 import { switchToProject } from "../../app/services/project-switch-service.js";
 import { normalizePathKey } from "../../app/services/worktree-service.js";
 import { createProjectSwitchPresentation } from "../services/project-switch-presentation.js";
 import { appendInlineMenuCancelButton, ensureActiveInlineMenu } from "../menus/inline-menu.js";
+import { getProjectFolderName } from "../menus/project-selection-menu.js";
 import { isForegroundBusy } from "../../app/services/run-control-service.js";
 import { replyBusyBlocked } from "../messages/busy-blocked-renderer.js";
 import { logger } from "../../utils/logger.js";
@@ -27,7 +32,7 @@ import { config } from "../../config.js";
 import { t } from "../../i18n/index.js";
 import { formatSessionTitle } from "../../app/formatters/session-title-formatter.js";
 import { alert, cancelMenu, failure } from "./feedback.js";
-import { attachToSession } from "../../app/services/attach-service.js";
+import { attachToSession, type AttachSessionResult } from "../../app/services/attach-service.js";
 import { renderAssistantFinalPartsSafe } from "../messages/assistant-rendering.js";
 import {
   prepareAssistantDocuments,
@@ -280,6 +285,111 @@ async function removeCallbackReplyMarkup(ctx: Context): Promise<void> {
   }
 }
 
+// Telegram rejects a forum topic name longer than this.
+const TOPIC_NAME_MAX_LENGTH = 128;
+
+/**
+ * The forum topic a session is shown under: its title, kept apart from a
+ * same-named session of another project by the project folder. Telegram caps a
+ * topic name at 128 characters, so a long one is cut to fit.
+ */
+export function buildSessionTopicName(title: string, directory: string): string {
+  const sessionName = formatSessionTitle(title).trim();
+  const projectName = getProjectFolderName(directory);
+  const name = projectName ? `${sessionName} · ${projectName}` : sessionName;
+  return name.slice(0, TOPIC_NAME_MAX_LENGTH);
+}
+
+/** The topic a picked session lives in, together with the chat holding it. */
+interface SessionTopic {
+  chatId: number;
+  threadId: number;
+}
+
+/** The user-facing notice for a topic the bot could not create. */
+async function reportTopicCreateFailure(ctx: Context, chatId: number): Promise<void> {
+  try {
+    await ctx.api.sendMessage(chatId, t("sessions.topic_create_failed"));
+  } catch (err) {
+    logger.error("[Sessions] Failed to report the topic creation failure:", err);
+  }
+}
+
+/**
+ * The forum topic the picked session should be shown in. A topic already bound
+ * to the session is reused, so reconnecting never creates a second one. Chats
+ * that cannot hold topics (a private chat, or a chat update with no type) are
+ * left exactly as they were. A topic the bot cannot create - the chat is not a
+ * forum, the bot lacks the Manage Topics right, per-chat topic limits - degrades
+ * gracefully: the user is told and the selection continues in the chat itself.
+ */
+async function ensureSessionTopic(
+  ctx: Context,
+  session: SessionInfo,
+): Promise<SessionTopic | null> {
+  const chat = ctx.chat;
+  if (!chat || (chat.type !== "group" && chat.type !== "supergroup")) {
+    return null;
+  }
+
+  const existing = getTopicBindingBySession(session.id);
+  if (existing) {
+    return { chatId: existing.chatId, threadId: existing.threadId };
+  }
+
+  const topicName = buildSessionTopicName(session.title, session.directory);
+  try {
+    const created = await ctx.api.createForumTopic(chat.id, topicName);
+    await registerTopicBinding({
+      chatId: chat.id,
+      threadId: created.message_thread_id,
+      sessionId: session.id,
+      directory: session.directory,
+      topicName,
+    });
+    logger.info(
+      `[Sessions] Created forum topic for session: sessionId=${session.id}, threadId=${created.message_thread_id}`,
+    );
+    return { chatId: chat.id, threadId: created.message_thread_id };
+  } catch (error) {
+    logger.error("[Sessions] Failed to create a forum topic for the session:", error);
+    await reportTopicCreateFailure(ctx, chat.id);
+    return null;
+  }
+}
+
+/**
+ * The first message in a session's topic: which session the topic belongs to and
+ * the state the attach restored. Prompts the attach restored belong to the chat
+ * the session was followed in, not the topic, so they are only reported here; a
+ * TODO(topic-start) revisits moving them into the topic once the spike settles
+ * where restored prompts should live.
+ */
+async function sendSessionTopicStartMessage(
+  api: Context["api"],
+  topic: SessionTopic,
+  session: SessionInfo,
+  attachResult: AttachSessionResult | null,
+): Promise<void> {
+  const lines = [t("sessions.selected", { title: formatSessionTitle(session.title) })];
+  if (attachResult?.restoredQuestion) {
+    lines.push(t("attach.restored_question"));
+  }
+  if (attachResult && attachResult.restoredPermissions > 0) {
+    lines.push(
+      t("attach.restored_permissions", { count: attachResult.restoredPermissions }),
+    );
+  }
+
+  try {
+    await api.sendMessage(topic.chatId, lines.join("\n"), {
+      message_thread_id: topic.threadId,
+    });
+  } catch (err) {
+    logger.error("[Sessions] Failed to send the session topic start message:", err);
+  }
+}
+
 export async function selectSessionById(
   ctx: Context,
   deps: SessionSelectDeps,
@@ -350,8 +460,9 @@ export async function selectSessionById(
   }
 
   try {
+    let attachResult: AttachSessionResult | null = null;
     try {
-      await attachToSession({
+      attachResult = await attachToSession({
         ...deps,
         chatId: ctx.chat!.id,
         session: sessionInfo,
@@ -374,6 +485,10 @@ export async function selectSessionById(
     if (isSessionOnDashboard && modelChanged) {
       await deps.pinnedMessageManager.onModelChange();
     }
+
+    // The session's topic is set up only after it is really followed, and only
+    // for an explicit selection, so no session gets a topic on its own.
+    const topic = await ensureSessionTopic(ctx, sessionInfo);
 
     if (ctx.chat) {
       const chatId = ctx.chat.id;
@@ -404,6 +519,10 @@ export async function selectSessionById(
         );
       } catch (err) {
         logger.error("[Sessions] Failed to send selection message:", err);
+      }
+
+      if (topic) {
+        await sendSessionTopicStartMessage(ctx.api, topic, sessionInfo, attachResult);
       }
 
       if (deliverPick) {

@@ -411,6 +411,12 @@ interface DeferredOutboundTask {
 
 export class SummaryAggregator {
   private currentSessionId: string | null = null;
+  /**
+   * Every session whose events are followed, the primary (current) one included.
+   * Gates that drop "another session's" event check this set instead of the
+   * single primary session, so several bound topics each get their own output.
+   */
+  private followedSessionIds = new Set<string>();
   private textMessageStates: Map<string, TextMessageState> = new Map();
   private thinkingMessageStates: Map<string, ThinkingMessageState> = new Map();
   private messages: Map<string, { role: string }> = new Map();
@@ -492,6 +498,18 @@ export class SummaryAggregator {
   private turnEndCount = 0;
 
   setBotAndChatId(bot: Bot, chatId: number): void {
+    // The fallback destination (chats with no topic binding) is set once. A later
+    // followed topic passing its own chat must not move it, or every unbound
+    // session would start delivering into the topic of the last attach.
+    if (this.chatId !== null) {
+      if (this.chatId !== chatId) {
+        logger.warn(
+          `[Aggregator] Ignoring a different fallback chat: current=${this.chatId}, new=${chatId}`,
+        );
+      }
+      return;
+    }
+
     this.bot = bot;
     this.chatId = chatId;
   }
@@ -913,11 +931,115 @@ export class SummaryAggregator {
       this.trackedSessionParents.set(sessionId, null);
       this.acceptsSubagentEvents = true;
     }
+    this.followedSessionIds.add(sessionId);
+  }
+
+  /** Follows a session's events without making it the primary (dashboard) one. */
+  followSession(sessionId: string): void {
+    this.followedSessionIds.add(sessionId);
+  }
+
+  /**
+   * Stops following a session's events. Unfollowing the primary also drops that
+   * session's own per-session state and hands the primary slot to another
+   * followed session, or to none when the last one goes; the state of the other
+   * sessions is left untouched.
+   */
+  unfollowSession(sessionId: string): void {
+    const wasPrimary = this.currentSessionId === sessionId;
+    this.followedSessionIds.delete(sessionId);
+
+    if (!wasPrimary) {
+      return;
+    }
+
+    this.dropSessionState(sessionId);
+
+    const nextPrimary = this.firstFollowedSessionId();
+    this.turnEndCount++;
+    this.liveTurnStartedAt = null;
+    this.lastSubagentSnapshot = "";
+
+    if (nextPrimary) {
+      this.currentSessionId = nextPrimary;
+      this.trackedSessionParents.set(nextPrimary, null);
+      this.acceptsSubagentEvents = true;
+      return;
+    }
+
+    this.currentSessionId = null;
+    this.acceptsSubagentEvents = false;
+  }
+
+  /** The first session still followed, in the order the sessions were followed. */
+  private firstFollowedSessionId(): string | null {
+    for (const id of this.followedSessionIds) {
+      return id;
+    }
+    return null;
+  }
+
+  /** A session and every tracked subagent hanging off it, directly or through another. */
+  private collectOwnedSessions(rootSessionId: string): Set<string> {
+    const owned = new Set<string>([rootSessionId]);
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const [child, parent] of this.trackedSessionParents) {
+        if (owned.has(child) || !parent || !owned.has(parent)) {
+          continue;
+        }
+        owned.add(child);
+        changed = true;
+      }
+    }
+    return owned;
+  }
+
+  /**
+   * Removes every map entry a session and its subagent tree own, keyed by their
+   * session ids. Message-part state is keyed by message id, with no session
+   * index to attribute it from, so it is left to its completion cleanup.
+   */
+  private dropSessionState(sessionId: string): void {
+    const owned = this.collectOwnedSessions(sessionId);
+
+    for (const ownedId of owned) {
+      this.trackedSessionParents.delete(ownedId);
+      this.finishedSubagentSessionIds.delete(ownedId);
+      this.endedTrackedSessionIds.delete(ownedId);
+      this.backgroundChildSessionIds.delete(ownedId);
+      this.subagentCardIdBySessionId.delete(ownedId);
+      this.pendingSubagentCardIdsByParent.delete(ownedId);
+      this.pendingChildSessionIdsByParent.delete(ownedId);
+      this.fallbackSubagentCardIdsByParent.delete(ownedId);
+    }
+
+    for (const [cardId, state] of this.subagentStates) {
+      if (owned.has(state.parentSessionId)) {
+        this.subagentStates.delete(cardId);
+        this.removeFromQueue(this.pendingSubagentCardIdsByParent, state.parentSessionId, cardId);
+        this.removeFromQueue(this.fallbackSubagentCardIdsByParent, state.parentSessionId, cardId);
+      }
+    }
+
+    this.subagentOrder = this.subagentOrder.filter((cardId) => this.subagentStates.has(cardId));
+
+    for (const [callId, call] of this.openTaskCalls) {
+      if (owned.has(call.parentSessionId)) {
+        this.openTaskCalls.delete(callId);
+      }
+    }
+  }
+
+  isFollowed(sessionId: string): boolean {
+    return this.followedSessionIds.has(sessionId);
   }
 
   clear(): void {
     this.stopTypingIndicator();
     this.currentSessionId = null;
+    this.followedSessionIds.clear();
     this.textMessageStates.clear();
     this.thinkingMessageStates.clear();
     this.messages.clear();
@@ -1934,7 +2056,7 @@ export class SummaryAggregator {
       return;
     }
 
-    if (info.sessionID !== this.currentSessionId) {
+    if (!this.followedSessionIds.has(info.sessionID)) {
       return;
     }
 
@@ -2030,7 +2152,7 @@ export class SummaryAggregator {
         }
 
         if (this.onCompleteCallback && finalText.length > 0) {
-          const sessionId = this.currentSessionId;
+          const sessionId = info.sessionID;
           this.scheduleOutbound(() => {
             if (!sessionId) {
               return;
@@ -2062,10 +2184,10 @@ export class SummaryAggregator {
   ): void {
     const { part } = event.properties;
 
-    const isCurrentRootSession = part.sessionID === this.currentSessionId;
+    const isFollowedRootSession = this.followedSessionIds.has(part.sessionID);
     const isTrackedChildSession = this.isTrackedChildSession(part.sessionID);
 
-    if (!isCurrentRootSession && !isTrackedChildSession) {
+    if (!isFollowedRootSession && !isTrackedChildSession) {
       return;
     }
 
@@ -2075,7 +2197,9 @@ export class SummaryAggregator {
 
     if (part.type === "subtask") {
       // A subtask of a subagent would be a nested subagent, which gets no card.
-      if (!isCurrentRootSession) {
+      // Only the primary session's subtasks open cards; a followed session's own
+      // output is delivered without the dashboard's subagent machinery.
+      if (part.sessionID !== this.currentSessionId) {
         return;
       }
       this.registerSubtaskPart(
@@ -2403,7 +2527,7 @@ export class SummaryAggregator {
     delta: string,
     fullTextHint?: string,
   ): void {
-    if (sessionID !== this.currentSessionId) {
+    if (!this.followedSessionIds.has(sessionID)) {
       return;
     }
 
@@ -2528,7 +2652,7 @@ export class SummaryAggregator {
     fullTextHint?: string,
     title?: string,
   ): void {
-    if (sessionID !== this.currentSessionId) {
+    if (!this.followedSessionIds.has(sessionID)) {
       return;
     }
 
@@ -2600,7 +2724,7 @@ export class SummaryAggregator {
   }
 
   private emitExternalUserInputIfReady(sessionId: string, messageId: string): void {
-    if (sessionId !== this.currentSessionId || this.deliveredExternalUserMessageIds.has(messageId)) {
+    if (!this.followedSessionIds.has(sessionId) || this.deliveredExternalUserMessageIds.has(messageId)) {
       return;
     }
 
@@ -2886,12 +3010,14 @@ export class SummaryAggregator {
   ): void {
     const { sessionID, status } = event.properties;
 
-    if (sessionID !== this.currentSessionId) {
+    if (!this.followedSessionIds.has(sessionID)) {
       return;
     }
 
     if (status?.type === "busy") {
-      this.liveTurnStartedAt ??= Date.now();
+      if (sessionID === this.currentSessionId) {
+        this.liveTurnStartedAt ??= Date.now();
+      }
       return;
     }
 
@@ -2938,7 +3064,7 @@ export class SummaryAggregator {
       return;
     }
 
-    if (sessionID !== this.currentSessionId) {
+    if (!this.followedSessionIds.has(sessionID)) {
       return;
     }
 
@@ -2946,16 +3072,19 @@ export class SummaryAggregator {
     // Before the idle callback is scheduled, so a step of the next turn cannot join this run.
     this.onSessionBoundaryCallback?.(sessionID);
     this.emitSessionRunEnded(sessionID);
-    this.liveTurnStartedAt = null;
-    this.turnEndCount++;
-    this.acceptsSubagentEvents = false;
-    if (interrupted) {
-      this.interruptSubagents();
-    }
-    this.retireForegroundSubagents();
 
-    // Stop typing indicator when session goes idle
-    this.stopTypingIndicator();
+    if (sessionID === this.currentSessionId) {
+      this.liveTurnStartedAt = null;
+      this.turnEndCount++;
+      this.acceptsSubagentEvents = false;
+      if (interrupted) {
+        this.interruptSubagents();
+      }
+      this.retireForegroundSubagents();
+
+      // Stop typing indicator when session goes idle
+      this.stopTypingIndicator();
+    }
 
     if (this.onSessionIdleCallback) {
       const callback = this.onSessionIdleCallback;
@@ -2982,7 +3111,7 @@ export class SummaryAggregator {
     const properties = event.properties;
     const { sessionID } = properties;
 
-    if (sessionID !== this.currentSessionId) {
+    if (!this.followedSessionIds.has(sessionID)) {
       return;
     }
 
@@ -3027,20 +3156,23 @@ export class SummaryAggregator {
       return;
     }
 
-    if (!sessionID || sessionID !== this.currentSessionId) {
+    if (!sessionID || !this.followedSessionIds.has(sessionID)) {
       return;
     }
 
     logger.warn(`[Aggregator] Session error: ${sessionID}: ${message}`);
     this.emitSessionRunEnded(sessionID);
-    this.liveTurnStartedAt = null;
-    this.turnEndCount++;
-    this.acceptsSubagentEvents = false;
-    if (interrupted) {
-      this.interruptSubagents();
+
+    if (sessionID === this.currentSessionId) {
+      this.liveTurnStartedAt = null;
+      this.turnEndCount++;
+      this.acceptsSubagentEvents = false;
+      if (interrupted) {
+        this.interruptSubagents();
+      }
+      this.retireForegroundSubagents();
+      this.stopTypingIndicator();
     }
-    this.retireForegroundSubagents();
-    this.stopTypingIndicator();
 
     if (this.onSessionErrorCallback) {
       const callback = this.onSessionErrorCallback;
@@ -3058,7 +3190,7 @@ export class SummaryAggregator {
     const { id, sessionID, questions } = event.properties;
     const isTrackedChild = this.isTrackedChildSession(sessionID);
 
-    if (sessionID !== this.currentSessionId && !isTrackedChild) {
+    if (!this.followedSessionIds.has(sessionID) && !isTrackedChild) {
       logger.debug(
         `[Aggregator] Ignoring question.asked for different session: ${sessionID} (current: ${this.currentSessionId})`,
       );
@@ -3086,7 +3218,7 @@ export class SummaryAggregator {
     outcome: QuestionSettledOutcome,
   ): void {
     const { sessionID, requestID } = properties;
-    if (sessionID !== this.currentSessionId && !this.isTrackedChildSession(sessionID)) {
+    if (!this.followedSessionIds.has(sessionID) && !this.isTrackedChildSession(sessionID)) {
       logger.debug(
         `[Aggregator] Ignoring settled question for different session: ${sessionID} (current: ${this.currentSessionId})`,
       );
@@ -3132,7 +3264,7 @@ export class SummaryAggregator {
   ): void {
     const properties = event.properties;
 
-    if (properties.sessionID !== this.currentSessionId) {
+    if (!this.followedSessionIds.has(properties.sessionID)) {
       return;
     }
 
@@ -3159,7 +3291,7 @@ export class SummaryAggregator {
   ): void {
     const request = event.properties;
 
-    const isCurrent = request.sessionID === this.currentSessionId;
+    const isCurrent = this.followedSessionIds.has(request.sessionID);
     const isTrackedChild = this.isTrackedChildSession(request.sessionID);
 
     if (!isCurrent && !isTrackedChild) {
@@ -3193,7 +3325,7 @@ export class SummaryAggregator {
     const { sessionID, requestID } = event.properties;
     // An older server may leave the decision out; the prompt then ends without naming it.
     const reply: PermissionReply | null = event.properties.reply ?? null;
-    const isCurrent = sessionID === this.currentSessionId;
+    const isCurrent = this.followedSessionIds.has(sessionID);
     const isTrackedChild = this.isTrackedChildSession(sessionID);
 
     if (!isCurrent && !isTrackedChild) {

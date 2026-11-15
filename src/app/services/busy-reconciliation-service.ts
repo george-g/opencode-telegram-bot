@@ -1,5 +1,6 @@
 import { opencodeClient } from "../../opencode/client.js";
 import type { AppContainer } from "../bootstrap/app-container.js";
+import type { AttachedSessionState } from "../managers/attach-manager.js";
 import type { ForegroundBusySession } from "../managers/foreground-session-state-manager.js";
 import { markAttachedSessionBusy, markAttachedSessionIdle } from "./attach-service.js";
 import { logger } from "../../utils/logger.js";
@@ -43,16 +44,16 @@ function getReconciliationTargets(
   deps: BusyReconciliationDeps,
 ): {
   foregroundBusySessions: ForegroundBusySession[];
-  attachedSessionForDirectory: ReturnType<BusyReconciliationDeps["attachManager"]["getSnapshot"]>;
+  attachedSessionsForDirectory: AttachedSessionState[];
 } {
   const foregroundBusySessions = deps.foregroundSessionState
     .getBusySessions()
     .filter((session) => session.directory === directory);
-  const attachedSession = deps.attachManager.getSnapshot();
-  const attachedSessionForDirectory =
-    attachedSession?.directory === directory ? attachedSession : null;
+  const attachedSessionsForDirectory = deps.attachManager
+    .listSnapshots()
+    .filter((session) => session.directory === directory);
 
-  return { foregroundBusySessions, attachedSessionForDirectory };
+  return { foregroundBusySessions, attachedSessionsForDirectory };
 }
 
 function getSessionStatus(
@@ -90,10 +91,10 @@ export async function reconcileBusyStateNow(
     return;
   }
 
-  const { foregroundBusySessions, attachedSessionForDirectory } =
+  const { foregroundBusySessions, attachedSessionsForDirectory } =
     getReconciliationTargets(directory, deps);
 
-  if (foregroundBusySessions.length === 0 && !attachedSessionForDirectory) {
+  if (foregroundBusySessions.length === 0 && attachedSessionsForDirectory.length === 0) {
     return;
   }
 
@@ -109,16 +110,16 @@ export async function reconcileBusyStateNow(
       .map((session) => session.sessionId),
   );
 
-  if (attachedSessionForDirectory) {
-    const attachedStatus = getSessionStatus(statuses, attachedSessionForDirectory.sessionId);
+  for (const attachedSession of attachedSessionsForDirectory) {
+    const attachedStatus = getSessionStatus(statuses, attachedSession.sessionId);
 
     if (attachedStatus?.type === "busy") {
-      await markAttachedSessionBusy(attachedSessionForDirectory.sessionId, deps);
+      await markAttachedSessionBusy(attachedSession.sessionId, deps);
     } else if (
       isTerminalStatus(attachedStatus) &&
-      !freshForegroundSessionIds.has(attachedSessionForDirectory.sessionId)
+      !freshForegroundSessionIds.has(attachedSession.sessionId)
     ) {
-      await markAttachedSessionIdle(attachedSessionForDirectory.sessionId, deps);
+      await markAttachedSessionIdle(attachedSession.sessionId, deps);
     }
   }
 
@@ -146,10 +147,11 @@ export async function reconcileBusyStateNow(
     logger.info(
       `[BusyReconciliation] Clearing stale foreground busy state: session=${session.sessionId}, directory=${session.directory}, status=${status?.type ?? "not-found"}`,
     );
-    if (attachedSessionForDirectory?.sessionId !== session.sessionId) {
-      await markAttachedSessionIdle(session.sessionId, deps);
+    const sessionId = session.sessionId;
+    if (!attachedSessionsForDirectory.some((attached) => attached.sessionId === sessionId)) {
+      await markAttachedSessionIdle(sessionId, deps);
     }
-    await clearForegroundBusySession(session.sessionId, deps);
+    await clearForegroundBusySession(sessionId, deps);
     clearedForegroundSession = true;
   }
 
@@ -167,9 +169,9 @@ export async function reconcileBusyState(
     return;
   }
 
-  const { foregroundBusySessions, attachedSessionForDirectory } =
+  const { foregroundBusySessions, attachedSessionsForDirectory } =
     getReconciliationTargets(directory, deps);
-  if (foregroundBusySessions.length === 0 && !attachedSessionForDirectory) {
+  if (foregroundBusySessions.length === 0 && attachedSessionsForDirectory.length === 0) {
     return;
   }
 

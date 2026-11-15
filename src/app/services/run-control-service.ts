@@ -20,9 +20,10 @@ function getBusyDirectories(deps: ForegroundBusyDeps): string[] {
     directories.add(session.directory);
   }
 
-  const attached = deps.attachManager.getSnapshot();
-  if (attached?.busy) {
-    directories.add(attached.directory);
+  for (const session of deps.attachManager.listSnapshots()) {
+    if (session.busy) {
+      directories.add(session.directory);
+    }
   }
 
   return [...directories];

@@ -62,6 +62,9 @@ export type AttachStateDeps = Pick<AppContainer, "attachManager">;
 
 export type DetachSessionDeps = Pick<AppContainer, "attachManager" | "resetAggregator" | "goalManager">;
 
+/** Detaching one of several attached sessions: it stops being followed, the rest stay. */
+export type DetachOneSessionDeps = Pick<AppContainer, "attachManager" | "summaryAggregator">;
+
 type AttachRestoreDeps = Pick<
   AppContainer,
   "attachManager" | "permissionManager" | "questionManager" | "summaryAggregator" | "interactionManager"
@@ -342,12 +345,20 @@ export async function attachToSession(deps: AttachSessionDeps): Promise<AttachSe
   try {
     if (!alreadyAttached) {
       await ensureEventSubscription(session.directory);
+    }
+
+    // The first attached session is the dashboard's primary one. Later sessions are
+    // followed without stealing the dashboard, so several bound topics each keep
+    // delivering to their own chat.
+    if (!attachManager.isAttached()) {
       summaryAggregator.setSession(session.id);
-      summaryAggregator.setBotAndChatId(bot, chatId);
-      attachManager.attach(session.id, session.directory);
     } else {
-      summaryAggregator.setSession(session.id);
-      summaryAggregator.setBotAndChatId(bot, chatId);
+      summaryAggregator.followSession(session.id);
+    }
+    summaryAggregator.setBotAndChatId(bot, chatId);
+
+    if (!alreadyAttached) {
+      attachManager.attach(session.id, session.directory);
     }
   } finally {
     // Drawn only now, so updates that arrived since the values loaded are in the first draw;
@@ -628,6 +639,24 @@ export function detachAttachedSession(reason: string, deps: DetachSessionDeps): 
   deps.resetAggregator();
   deps.attachManager.clear(reason);
   void syncPinnedAttachState(deps);
+}
+
+/**
+ * Removes one attached session, leaving the others followed. The primary keeps
+ * its dashboard; a removed primary leaves none, as the legacy full detach did.
+ */
+export function detachOneAttachedSession(
+  sessionId: string,
+  reason: string,
+  deps: DetachOneSessionDeps,
+): void {
+  if (!deps.attachManager.isAttachedSession(sessionId)) {
+    return;
+  }
+
+  deps.summaryAggregator.unfollowSession(sessionId);
+  resetStreamThrottle(sessionId);
+  deps.attachManager.detach(sessionId, reason);
 }
 
 export async function markAttachedSessionBusy(
