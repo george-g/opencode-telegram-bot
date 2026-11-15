@@ -554,6 +554,7 @@ describe("bot/commands/commands", () => {
     const ctx = createCallbackContext("commands:execute", 400);
     const handled = await handleCommandsCallback(ctx, createDeps());
 
+    container.attachManager.clear("test_detach");
     container.attachManager.attach("session-2", "D:\\Projects\\Repo");
 
     const backgroundTask = getScheduledBackgroundTask();

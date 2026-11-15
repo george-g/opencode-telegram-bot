@@ -111,4 +111,50 @@ describe("bot/events/telegram-event-delivery", () => {
     await expect(inputFile.toRaw()).resolves.toBe(buffer);
     expect(options).toEqual({ caption: "diff of app.ts" });
   });
+
+  it("omits message_thread_id for a destination with no topic binding", async () => {
+    const { api, destination } = createDestination();
+
+    await new TelegramEventDelivery().sendText(destination, "hello");
+    await new TelegramEventDelivery().editText(destination, 7, "hello again");
+
+    // Exactly the pre-topic call shape, so unbound chats are untouched.
+    expect(api.sendMessage).toHaveBeenCalledWith(42, "hello");
+    expect(api.editMessageText).toHaveBeenCalledWith(42, 7, "hello again");
+  });
+
+  it("passes message_thread_id in sendMessage for a topic-bound destination", async () => {
+    const { api } = createDestination();
+    const destination = { api, chatId: 100, messageThreadId: 42 } as unknown as TelegramDestination;
+
+    await new TelegramEventDelivery().sendText(destination, "hello", { disable_notification: true });
+    await new TelegramEventDelivery().sendText(destination, "plain");
+
+    expect(api.sendMessage).toHaveBeenNthCalledWith(1, 100, "hello", {
+      disable_notification: true,
+      message_thread_id: 42,
+    });
+    expect(api.sendMessage).toHaveBeenNthCalledWith(2, 100, "plain", { message_thread_id: 42 });
+  });
+
+  it("passes message_thread_id in editMessageText for a topic-bound destination", async () => {
+    const { api } = createDestination();
+    const destination = { api, chatId: 100, messageThreadId: 42 } as unknown as TelegramDestination;
+
+    await new TelegramEventDelivery().editText(destination, 7, "edited");
+
+    expect(api.editMessageText).toHaveBeenCalledWith(100, 7, "edited", { message_thread_id: 42 });
+  });
+
+  it("routes two topic-bound destinations to their own thread ids", async () => {
+    const { api } = createDestination();
+    const first = { api, chatId: 100, messageThreadId: 11 } as unknown as TelegramDestination;
+    const second = { api, chatId: 200, messageThreadId: 22 } as unknown as TelegramDestination;
+
+    await new TelegramEventDelivery().sendText(first, "one");
+    await new TelegramEventDelivery().sendText(second, "two");
+
+    expect(api.sendMessage).toHaveBeenNthCalledWith(1, 100, "one", { message_thread_id: 11 });
+    expect(api.sendMessage).toHaveBeenNthCalledWith(2, 200, "two", { message_thread_id: 22 });
+  });
 });

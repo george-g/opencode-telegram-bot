@@ -11,6 +11,7 @@ const mocked = vi.hoisted(() => ({
   clearSessionMock: vi.fn(),
   fetchSessionTitleMock: vi.fn(),
   detachAttachedSessionMock: vi.fn(),
+  detachOneAttachedSessionMock: vi.fn(),
   clearAllInteractionStateMock: vi.fn(),
   pinnedIsInitializedMock: vi.fn(() => true),
   pinnedClearMock: vi.fn().mockResolvedValue(undefined),
@@ -37,6 +38,7 @@ vi.mock("../../../src/app/services/session-service.js", () => ({
 
 vi.mock("../../../src/app/services/attach-service.js", () => ({
   detachAttachedSession: mocked.detachAttachedSessionMock,
+  detachOneAttachedSession: mocked.detachOneAttachedSessionMock,
 }));
 
 vi.mock("../../../src/bot/handlers/prompt.js", () => ({
@@ -87,6 +89,7 @@ describe("bot/commands/detach", () => {
     mocked.fetchSessionTitleMock.mockReset();
     mocked.fetchSessionTitleMock.mockImplementation(async (session: { title: string }) => session.title);
     mocked.detachAttachedSessionMock.mockClear();
+    mocked.detachOneAttachedSessionMock.mockClear();
     mocked.clearAllInteractionStateMock.mockClear();
     mocked.pinnedIsInitializedMock.mockClear();
     mocked.pinnedIsInitializedMock.mockReturnValue(true);
@@ -125,6 +128,7 @@ describe("bot/commands/detach", () => {
     await detachCommand(ctx as never, createDeps());
 
     expect(mocked.detachAttachedSessionMock).toHaveBeenCalledWith("detach_command", expect.anything());
+    expect(mocked.detachOneAttachedSessionMock).not.toHaveBeenCalled();
     expect(mocked.clearSessionMock).toHaveBeenCalledTimes(1);
     expect(mocked.clearAllInteractionStateMock).toHaveBeenCalledWith("detach_command");
     expect(mocked.foregroundMarkIdleMock).toHaveBeenCalledWith("session-1");
@@ -160,6 +164,60 @@ describe("bot/commands/detach", () => {
       t("detach.success", { title: "Idle Session" }),
       expect.any(Object),
     );
+  });
+
+  it("disconnects only the current session when several are attached", async () => {
+    const deps = createDeps();
+    deps.attachManager.attach("session-1", "D:/repo");
+    deps.attachManager.attach("session-2", "D:/repo");
+    const ctx = createContext();
+
+    await detachCommand(ctx as never, deps);
+
+    expect(mocked.detachOneAttachedSessionMock).toHaveBeenCalledWith(
+      "session-1",
+      "detach_command",
+      expect.anything(),
+    );
+    expect(mocked.detachAttachedSessionMock).not.toHaveBeenCalled();
+    expect(mocked.clearSessionMock).toHaveBeenCalledTimes(1);
+    expect(deps.attachManager.getSnapshot()).toMatchObject({ sessionId: "session-2" });
+  });
+
+  it("keeps the other session's dashboard when the foreground disconnect hands it over", async () => {
+    const deps = createDeps();
+    deps.attachManager.attach("session-1", "D:/repo");
+    deps.attachManager.attach("session-2", "D:/repo");
+    // The current session is the foreground: detaching it hands it to session-1.
+    mocked.currentSession = { id: "session-2", title: "Second", directory: "D:/repo" };
+    const ctx = createContext();
+
+    await detachCommand(ctx as never, deps);
+
+    expect(mocked.detachOneAttachedSessionMock).toHaveBeenCalledWith(
+      "session-2",
+      "detach_command",
+      expect.anything(),
+    );
+    expect(mocked.pinnedClearMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves the remaining dashboard in place when a non-foreground session disconnects", async () => {
+    const deps = createDeps();
+    deps.attachManager.attach("session-1", "D:/repo");
+    deps.attachManager.attach("session-2", "D:/repo");
+    mocked.currentSession = { id: "session-1", title: "First", directory: "D:/repo" };
+    const ctx = createContext();
+
+    await detachCommand(ctx as never, deps);
+
+    expect(mocked.detachOneAttachedSessionMock).toHaveBeenCalledWith(
+      "session-1",
+      "detach_command",
+      expect.anything(),
+    );
+    // The foreground session-2 keeps its dashboard.
+    expect(mocked.pinnedClearMock).not.toHaveBeenCalled();
   });
 
   it("names the session with the title OpenCode has for it before detaching", async () => {

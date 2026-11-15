@@ -7,6 +7,7 @@ import {
   processUserPrompt as processIncomingPrompt,
   type ProcessPromptDeps,
 } from "../../../src/bot/handlers/prompt.js";
+import { topicScopeMiddleware } from "../../../src/bot/middleware/topic-scope.js";
 import { promptAttachment } from "../../../src/app/managers/prompt-attachment-manager.js";
 import { createIncomingPrompt } from "../../../src/app/types/prompt.js";
 import { t } from "../../../src/i18n/index.js";
@@ -36,6 +37,10 @@ const mocked = vi.hoisted(() => ({
   setBotAndChatIdMock: vi.fn(),
   attachToSessionMock: vi.fn(),
   getTtsModeMock: vi.fn(),
+  topicBindings: {} as Record<
+    string,
+    { sessionId: string; directory: string; topicName: string; createdAt: string }
+  >,
 }));
 
 vi.mock("../../../src/opencode/client.js", () => ({
@@ -45,6 +50,12 @@ vi.mock("../../../src/opencode/client.js", () => ({
       prompt: mocked.sessionPromptMock,
       promptAsync: mocked.sessionPromptAsyncMock,
       create: mocked.sessionCreateMock,
+    },
+  },
+  // admitPromptToInbox sends through the V2 inbox endpoint on the same client.
+  opencodeV2Client: {
+    session: {
+      promptAsync: mocked.sessionPromptAsyncMock,
     },
   },
 }));
@@ -63,6 +74,9 @@ vi.mock("../../../src/app/services/session-cache-service.js", () => ({
 vi.mock("../../../src/app/stores/settings-store.js", () => ({
   getCurrentProject: vi.fn(() => mocked.currentProject),
   getTtsMode: mocked.getTtsModeMock,
+  // Backs topic-binding-store, so a bound forum topic resolves to its own session.
+  getTopicSessionBindings: vi.fn(() => mocked.topicBindings),
+  setTopicSessionBindings: vi.fn(),
 }));
 
 vi.mock("../../../src/app/services/agent-selection-service.js", () => ({
@@ -231,6 +245,7 @@ describe("bot/handlers/prompt", () => {
     mocked.editMessageReplyMarkupMock.mockReset();
     mocked.editMessageReplyMarkupMock.mockResolvedValue(undefined);
     mocked.getMissingFolderNoticeMock.mockReset().mockResolvedValue(null);
+    mocked.topicBindings = {};
   });
 
   describe("project folder gone", () => {
@@ -457,6 +472,7 @@ describe("bot/handlers/prompt", () => {
 
     expect(handled).toBe(true);
 
+    container.attachManager.clear("test_detach");
     container.attachManager.attach("session-2", "D:\\Projects\\Repo");
 
     const backgroundTask = getScheduledBackgroundTask();
@@ -834,6 +850,101 @@ describe("bot/handlers/prompt", () => {
 
       expect(mocked.resolvePendingAttachmentMock).toHaveBeenCalled();
       expect(mocked.interactionClearMock).not.toHaveBeenCalledWith("attachment_consumed");
+    });
+  });
+
+  describe("inbox admission with a forum topic binding", () => {
+    const TOPIC_SESSION = {
+      id: "session-B",
+      title: "Topic B",
+      directory: "D:\\Projects\\RepoB",
+    };
+
+    function createTopicContext(threadId: number): Context {
+      return {
+        chat: { id: 777 },
+        message: { message_thread_id: threadId },
+        reply: vi.fn().mockResolvedValue({ message_id: 100 }),
+        api: { editMessageReplyMarkup: mocked.editMessageReplyMarkupMock },
+      } as unknown as Context;
+    }
+
+    /** Mirrors the real chain: topicScopeMiddleware runs before the handlers. */
+    async function applyTopicScope(ctx: Context): Promise<void> {
+      await topicScopeMiddleware(ctx, async () => {});
+    }
+
+    it("sends a busy-time prompt into the bound topic's own session inbox", async () => {
+      // The global current session is A (session-1); the topic is bound to B.
+      mocked.topicBindings = {
+        "777:99": {
+          sessionId: TOPIC_SESSION.id,
+          directory: TOPIC_SESSION.directory,
+          topicName: TOPIC_SESSION.title,
+          createdAt: new Date().toISOString(),
+        },
+      };
+      mocked.sessionPromptAsyncMock.mockResolvedValue({
+        data: { inboxID: "inbox-B" },
+        error: null,
+      });
+      const ctx = createTopicContext(99);
+      await applyTopicScope(ctx);
+
+      const admitted = await admitPromptToInbox(
+        ctx,
+        createIncomingPrompt("Also check tests"),
+        createDeps(),
+        "steer",
+      );
+
+      expect(admitted).toEqual({ sessionId: "session-B", inboxId: "inbox-B" });
+      expect(mocked.sessionPromptAsyncMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionID: "session-B",
+          directory: "D:\\Projects\\RepoB",
+          delivery: "steer",
+        }),
+      );
+    });
+
+    it("falls back to the global session for an unbound topic", async () => {
+      mocked.sessionPromptAsyncMock.mockResolvedValue({
+        data: { inboxID: "inbox-A" },
+        error: null,
+      });
+      const ctx = createTopicContext(101);
+      await applyTopicScope(ctx);
+
+      const admitted = await admitPromptToInbox(
+        ctx,
+        createIncomingPrompt("Also check tests"),
+        createDeps(),
+        "steer",
+      );
+
+      expect(admitted).toEqual({ sessionId: "session-1", inboxId: "inbox-A" });
+      expect(mocked.sessionPromptAsyncMock).toHaveBeenCalledWith(
+        expect.objectContaining({ sessionID: "session-1" }),
+      );
+    });
+
+    it("uses the global session when the update carries no topic", async () => {
+      mocked.sessionPromptAsyncMock.mockResolvedValue({
+        data: { inboxID: "inbox-A" },
+        error: null,
+      });
+      const ctx = createContext();
+      await applyTopicScope(ctx);
+
+      const admitted = await admitPromptToInbox(
+        ctx,
+        createIncomingPrompt("Also check tests"),
+        createDeps(),
+        "steer",
+      );
+
+      expect(admitted).toEqual({ sessionId: "session-1", inboxId: "inbox-A" });
     });
   });
 });

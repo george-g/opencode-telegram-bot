@@ -145,6 +145,24 @@ describe("busy reconciliation", () => {
     expect(mocked.markAttachedSessionIdleMock).not.toHaveBeenCalled();
   });
 
+  it("reconciles every attached session, not only the foreground one", async () => {
+    deps.attachManager.attach("session-1", "D:/repo");
+    deps.attachManager.attach("session-2", "D:/repo");
+    deps.attachManager.markBusy("session-1");
+    mocked.sessionStatusMock.mockResolvedValue({
+      data: {
+        "session-1": { type: "idle" },
+        "session-2": { type: "busy" },
+      },
+      error: null,
+    });
+
+    await reconcileBusyStateNow("D:/repo", deps, 13_000);
+
+    expect(mocked.markAttachedSessionIdleMock).toHaveBeenCalledWith("session-1", deps);
+    expect(mocked.markAttachedSessionBusyMock).toHaveBeenCalledWith("session-2", deps);
+  });
+
   it("marks the attached session idle when the server reports idle", async () => {
     deps.attachManager.attach("session-1", "D:/repo");
     deps.attachManager.markBusy("session-1");

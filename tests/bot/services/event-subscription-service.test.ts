@@ -9,6 +9,10 @@ import { defined } from "../../helpers/defined.js";
 import { t } from "../../../src/i18n/index.js";
 import { createTestAppContainer } from "../../helpers/app-container.js";
 import type { AppContainer } from "../../../src/app/bootstrap/app-container.js";
+import {
+  __resetTopicBindingStoreForTests,
+  registerTopicBinding,
+} from "../../../src/app/stores/topic-binding-store.js";
 
 const mocked = vi.hoisted(() => ({
   subscribeToEvents: vi.fn(),
@@ -562,6 +566,7 @@ describe("bot/services/event-subscription-service", () => {
 
     const settingsStore = await import("../../../src/app/stores/settings-store.js");
     settingsStore.__resetSettingsForTests();
+    __resetTopicBindingStoreForTests();
     await resetSingletonState();
   });
 
@@ -2546,6 +2551,82 @@ describe("bot/services/event-subscription-service", () => {
     });
     expect(defined(api.sendMessage.mock.calls[1]?.[1])).toContain("test-provider/test-model");
     expect(api.sendMessageDraft).not.toHaveBeenCalled();
+  });
+
+  it("routes a topic-bound session to its chat and thread and leaves an unbound one on the plain chat", async () => {
+    const { api, summaryAggregator } = await setupService(true, {
+      responseStreamingMode: "edit",
+      showAssistantRunFooter: false,
+      startAssistantRun: true,
+    });
+
+    await registerTopicBinding({
+      chatId: 100,
+      threadId: 55,
+      sessionId: "session-1",
+      directory: "D:/repo",
+      topicName: "Feature work",
+    });
+
+    emitAssistantTextPart(summaryAggregator, "Final answer");
+    emitAssistantCompleted(summaryAggregator);
+    emitSessionIdle(summaryAggregator);
+
+    await vi.waitFor(
+      () => {
+        expect(api.sendMessage).toHaveBeenCalledTimes(1);
+      },
+      { timeout: 3000 },
+    );
+
+    const [chatId, text, options] = defined(api.sendMessage.mock.calls[0]);
+    expect(chatId).toBe(100);
+    expect(text).toBe("Final answer");
+    expect(options).toMatchObject({ message_thread_id: 55 });
+  });
+
+  it("treats every topic-bound session as foreground, not only the current one", async () => {
+    await setupService(true);
+    const service = activeService as unknown as {
+      policy: { isForegroundSession(sessionId: string): boolean };
+    };
+
+    await registerTopicBinding({
+      chatId: 100,
+      threadId: 55,
+      sessionId: "session-2",
+      directory: "D:/repo",
+      topicName: "Second",
+    });
+
+    // The current session and a topic-bound one are both foreground.
+    expect(service.policy.isForegroundSession("session-1")).toBe(true);
+    expect(service.policy.isForegroundSession("session-2")).toBe(true);
+    // Neither current nor bound: not foreground, as before topics existed.
+    expect(service.policy.isForegroundSession("session-3")).toBe(false);
+  });
+
+  it("keeps an unbound session on the plain chat with no thread", async () => {
+    const { api, summaryAggregator } = await setupService(true, {
+      responseStreamingMode: "edit",
+      showAssistantRunFooter: false,
+      startAssistantRun: true,
+    });
+
+    emitAssistantTextPart(summaryAggregator, "Final answer");
+    emitAssistantCompleted(summaryAggregator);
+    emitSessionIdle(summaryAggregator);
+
+    await vi.waitFor(
+      () => {
+        expect(api.sendMessage).toHaveBeenCalledTimes(1);
+      },
+      { timeout: 3000 },
+    );
+
+    const [chatId, , options] = defined(api.sendMessage.mock.calls[0]);
+    expect(chatId).toBe(42);
+    expect(options?.message_thread_id).toBeUndefined();
   });
 
   describe("draft text before a question or permission prompt", () => {

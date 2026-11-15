@@ -43,7 +43,10 @@ import { createEventRouter, type EventRouterDeps } from "../../../src/app/servic
 
 function createDeps() {
   const deps = {
-    attachManager: { getSnapshot: vi.fn().mockReturnValue(null) },
+    attachManager: {
+      getSnapshot: vi.fn().mockReturnValue(null),
+      getSnapshotFor: vi.fn().mockReturnValue(null),
+    },
     backgroundSessionTracker: { processEvent: vi.fn() },
     summaryAggregator: { processEvent: vi.fn() },
   };
@@ -108,7 +111,7 @@ describe("app/services/event-router", () => {
 
   it("does only subscription-wide work for an event without a session", () => {
     const { deps, routerDeps } = createDeps();
-    deps.attachManager.getSnapshot.mockReturnValue({ sessionId: "session-1" });
+    deps.attachManager.getSnapshotFor.mockReturnValue({ sessionId: "session-1" });
     const isForegroundSession = vi.fn().mockReturnValue(true);
     const route = createEventRouter({
       directory: "D:/repo",
@@ -127,7 +130,9 @@ describe("app/services/event-router", () => {
 
   it("marks the attached session busy from its own progress events", () => {
     const { deps, routerDeps } = createDeps();
-    deps.attachManager.getSnapshot.mockReturnValue({ sessionId: "session-1" });
+    deps.attachManager.getSnapshotFor.mockImplementation((sessionId: string) =>
+      sessionId === "session-1" ? { sessionId: "session-1" } : null,
+    );
     const route = createEventRouter({
       directory: "D:/repo",
       deps: routerDeps,
@@ -139,5 +144,22 @@ describe("app/services/event-router", () => {
 
     expect(mocked.markAttachedSessionBusy).toHaveBeenCalledTimes(1);
     expect(mocked.markAttachedSessionBusy).toHaveBeenCalledWith("session-1", routerDeps);
+  });
+
+  it("marks busy the session a progress event belongs to, not only the foreground one", () => {
+    const { deps, routerDeps } = createDeps();
+    deps.attachManager.getSnapshotFor.mockImplementation((sessionId: string) =>
+      sessionId === "session-2" ? { sessionId: "session-2" } : null,
+    );
+    const route = createEventRouter({
+      directory: "D:/repo",
+      deps: routerDeps,
+      isForegroundSession: () => false,
+    });
+
+    route(envelope({ type: "message.part.delta", properties: { sessionID: "session-2" } }));
+
+    expect(mocked.markAttachedSessionBusy).toHaveBeenCalledTimes(1);
+    expect(mocked.markAttachedSessionBusy).toHaveBeenCalledWith("session-2", routerDeps);
   });
 });

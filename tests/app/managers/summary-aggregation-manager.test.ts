@@ -4452,4 +4452,178 @@ describe("summary/aggregator", () => {
       );
     });
   });
+
+  describe("followed sessions", () => {
+    it("follows a session without making it primary and reports it as followed", () => {
+      summaryAggregator.setSession("session-1");
+      summaryAggregator.followSession("session-2");
+
+      expect(summaryAggregator.isFollowed("session-1")).toBe(true);
+      expect(summaryAggregator.isFollowed("session-2")).toBe(true);
+
+      summaryAggregator.unfollowSession("session-2");
+      expect(summaryAggregator.isFollowed("session-2")).toBe(false);
+      expect(summaryAggregator.isFollowed("session-1")).toBe(true);
+    });
+
+    it("completes a message of a followed session, not only of the primary one", () => {
+      const onComplete = vi.fn();
+      summaryAggregator.setOnComplete(onComplete);
+      summaryAggregator.setSession("session-1");
+      summaryAggregator.followSession("session-2");
+
+      summaryAggregator.processEvent({
+        type: "message.updated",
+        properties: {
+          info: {
+            id: "message-2",
+            sessionID: "session-2",
+            role: "assistant",
+            time: { created: Date.now() },
+          },
+        },
+      } as unknown as Event);
+      summaryAggregator.processEvent({
+        type: "message.part.updated",
+        properties: {
+          part: {
+            id: "text-2",
+            sessionID: "session-2",
+            messageID: "message-2",
+            type: "text",
+            text: "Followed answer",
+          },
+        },
+      } as unknown as Event);
+      summaryAggregator.processEvent({
+        type: "message.updated",
+        properties: {
+          info: {
+            id: "message-2",
+            sessionID: "session-2",
+            role: "assistant",
+            time: { created: Date.now() - 1000, completed: Date.now() },
+          },
+        },
+      } as unknown as Event);
+
+      expect(onComplete).toHaveBeenCalledWith(
+        "session-2",
+        "message-2",
+        "Followed answer",
+        expect.any(Object),
+      );
+    });
+
+    it("drops a message of a session that is neither followed nor primary", () => {
+      const onComplete = vi.fn();
+      summaryAggregator.setOnComplete(onComplete);
+      summaryAggregator.setSession("session-1");
+
+      summaryAggregator.processEvent({
+        type: "message.updated",
+        properties: {
+          info: {
+            id: "message-3",
+            sessionID: "session-3",
+            role: "assistant",
+            time: { created: Date.now(), completed: Date.now() },
+          },
+        },
+      } as unknown as Event);
+
+      expect(onComplete).not.toHaveBeenCalled();
+    });
+
+    it("clears the followed set on clear", () => {
+      summaryAggregator.setSession("session-1");
+      summaryAggregator.followSession("session-2");
+
+      summaryAggregator.clear();
+
+      expect(summaryAggregator.isFollowed("session-1")).toBe(false);
+      expect(summaryAggregator.isFollowed("session-2")).toBe(false);
+    });
+  });
+
+  describe("unfollowing the primary session", () => {
+    type AggregatorInternals = {
+      currentSessionId: string | null;
+      chatId: number | null;
+      bot: unknown;
+    };
+
+    const internals = (): AggregatorInternals =>
+      summaryAggregator as unknown as AggregatorInternals;
+
+    it("hands the primary slot to another followed session and drops its own state", () => {
+      summaryAggregator.setSession("session-1");
+      summaryAggregator.followSession("session-2");
+      summaryAggregator.registerRestoredPermissionChild("child-1", "session-1");
+      expect(summaryAggregator.isSubagentSession("child-1")).toBe(true);
+
+      summaryAggregator.unfollowSession("session-1");
+
+      expect(internals().currentSessionId).toBe("session-2");
+      expect(summaryAggregator.isFollowed("session-1")).toBe(false);
+      expect(summaryAggregator.isFollowed("session-2")).toBe(true);
+      // The primary's subagent tree went with it.
+      expect(summaryAggregator.isSubagentSession("child-1")).toBe(false);
+    });
+
+    it("leaves the primary and its state untouched when a non-primary session goes", () => {
+      summaryAggregator.setSession("session-1");
+      summaryAggregator.followSession("session-2");
+      summaryAggregator.registerRestoredPermissionChild("child-1", "session-1");
+
+      summaryAggregator.unfollowSession("session-2");
+
+      expect(internals().currentSessionId).toBe("session-1");
+      expect(summaryAggregator.isSubagentSession("child-1")).toBe(true);
+      expect(summaryAggregator.isFollowed("session-2")).toBe(false);
+    });
+
+    it("leaves no primary when the last followed session is unfollowed", () => {
+      summaryAggregator.setSession("session-1");
+      summaryAggregator.registerRestoredPermissionChild("child-1", "session-1");
+
+      summaryAggregator.unfollowSession("session-1");
+
+      expect(internals().currentSessionId).toBeNull();
+      expect(summaryAggregator.isSubagentSession("child-1")).toBe(false);
+    });
+  });
+
+  describe("fallback chat", () => {
+    type AggregatorInternals = {
+      chatId: number | null;
+      bot: unknown;
+    };
+
+    const internals = (): AggregatorInternals =>
+      summaryAggregator as unknown as AggregatorInternals;
+
+    it("keeps the first fallback chat and refuses to move it to a later topic chat", () => {
+      const firstBot = { api: { sendChatAction: vi.fn() } };
+      const secondBot = { api: { sendChatAction: vi.fn() } };
+
+      summaryAggregator.setBotAndChatId(firstBot as never, 42);
+      summaryAggregator.setBotAndChatId(secondBot as never, 77);
+
+      expect(internals().chatId).toBe(42);
+      expect(internals().bot).toBe(firstBot);
+    });
+
+    it("keeps the established fallback chat and bot on a same-chat attach", () => {
+      const firstBot = { api: { sendChatAction: vi.fn() } };
+      const secondBot = { api: { sendChatAction: vi.fn() } };
+
+      summaryAggregator.setBotAndChatId(firstBot as never, 42);
+      summaryAggregator.setBotAndChatId(secondBot as never, 42);
+
+      // The fallback destination is established once; a later attach does not overwrite it.
+      expect(internals().chatId).toBe(42);
+      expect(internals().bot).toBe(firstBot);
+    });
+  });
 });

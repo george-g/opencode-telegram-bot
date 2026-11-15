@@ -102,6 +102,8 @@ function createDeps(): AppContainer {
     ...container,
     summaryAggregator: {
       setSession: mocked.setSessionSummaryMock,
+      followSession: vi.fn(),
+      unfollowSession: vi.fn(),
       setBotAndChatId: mocked.setBotAndChatIdMock,
       registerRestoredPermissionChild: mocked.registerRestoredPermissionChildMock,
       getTurnEndMark: mocked.getTurnEndMarkMock,
