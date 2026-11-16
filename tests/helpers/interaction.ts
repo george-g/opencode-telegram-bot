@@ -11,15 +11,20 @@ type TestInteractionOptions = Omit<StartInteractionOptions, "kind" | "payload"> 
 
 /**
  * Opens the given interaction slot for guard-level tests that only care about the
- * kind, filling a stateful kind with empty data.
+ * kind, filling a stateful kind with empty data. The optional scope names the chat
+ * and topic; the default scope keeps the call sites that predate topics working.
  */
 export function startInteractionForTest(
   interactionManager: InteractionManager,
   options: TestInteractionOptions,
+  scope?: string,
 ): InteractionState {
+  const start = (state: StartInteractionOptions): InteractionState =>
+    interactionManager.start(state, scope);
+
   switch (options.kind) {
     case "question":
-      return interactionManager.start({
+      return start({
         ...options,
         kind: "question",
         payload: {
@@ -40,7 +45,7 @@ export function startInteractionForTest(
         },
       });
     case "permission":
-      return interactionManager.start({
+      return start({
         ...options,
         kind: "permission",
         payload: {
@@ -51,7 +56,7 @@ export function startInteractionForTest(
         },
       });
     case "rename":
-      return interactionManager.start({
+      return start({
         ...options,
         kind: "rename",
         payload: {
@@ -62,7 +67,7 @@ export function startInteractionForTest(
         },
       });
     case "task":
-      return interactionManager.start({
+      return start({
         ...options,
         kind: "task",
         payload: {
@@ -80,6 +85,6 @@ export function startInteractionForTest(
       });
     case "inline":
     case "custom":
-      return interactionManager.start({ ...options, kind: options.kind });
+      return start({ ...options, kind: options.kind });
   }
 }

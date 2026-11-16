@@ -6,6 +6,7 @@ import { logger } from "../../utils/logger.js";
 import { t } from "../../i18n/index.js";
 import { cancelPrompt } from "./feedback.js";
 import { RENAME_CANCEL_CALLBACK } from "../menus/rename-menu.js";
+import { getInteractionScope } from "../middleware/interaction-scope.js";
 
 function getCallbackMessageId(ctx: Context): number | null {
   const message = ctx.callbackQuery?.message;
@@ -22,10 +23,10 @@ export type RenameCallbackDeps = Pick<
   "interactionManager" | "pinnedMessageManager" | "renameManager"
 >;
 
-function clearRenameInteraction(deps: RenameCallbackDeps, reason: string): void {
-  const state = deps.interactionManager.getSnapshot();
+function clearRenameInteraction(deps: RenameCallbackDeps, reason: string, scope: string): void {
+  const state = deps.interactionManager.getSnapshot(scope);
   if (state?.kind === "rename") {
-    deps.interactionManager.clear(reason);
+    deps.interactionManager.clear(reason, scope);
   }
 }
 
@@ -37,27 +38,28 @@ export async function handleRenameCancel(ctx: Context, deps: RenameCallbackDeps)
 
   logger.debug("[RenameHandler] Cancel callback received");
 
-  if (!deps.renameManager.isWaitingForName()) {
-    clearRenameInteraction(deps, "rename_cancel_inactive");
+  const scope = getInteractionScope(ctx);
+  if (!deps.renameManager.isWaitingForName(scope)) {
+    clearRenameInteraction(deps, "rename_cancel_inactive", scope);
     await ctx.answerCallbackQuery({ text: t("rename.inactive_callback"), show_alert: true });
     return true;
   }
 
-  const interactionState = deps.interactionManager.getSnapshot();
+  const interactionState = deps.interactionManager.getSnapshot(scope);
   if (interactionState?.kind !== "rename") {
-    deps.renameManager.clear();
+    deps.renameManager.clear(scope);
     await ctx.answerCallbackQuery({ text: t("rename.inactive_callback"), show_alert: true });
     return true;
   }
 
   const callbackMessageId = getCallbackMessageId(ctx);
-  if (!deps.renameManager.isActiveMessage(callbackMessageId)) {
+  if (!deps.renameManager.isActiveMessage(callbackMessageId, scope)) {
     await ctx.answerCallbackQuery({ text: t("rename.inactive_callback"), show_alert: true });
     return true;
   }
 
-  clearRenameInteraction(deps, "rename_cancelled");
-  deps.renameManager.clear();
+  clearRenameInteraction(deps, "rename_cancelled", scope);
+  deps.renameManager.clear(scope);
 
   await cancelPrompt(ctx, "rename.cancelled");
 
@@ -68,7 +70,8 @@ export async function handleRenameTextAnswer(
   ctx: Context,
   deps: RenameCallbackDeps,
 ): Promise<boolean> {
-  if (!deps.renameManager.isWaitingForName()) {
+  const scope = getInteractionScope(ctx);
+  if (!deps.renameManager.isWaitingForName(scope)) {
     return false;
   }
 
@@ -81,17 +84,17 @@ export async function handleRenameTextAnswer(
     return false;
   }
 
-  const interactionState = deps.interactionManager.getSnapshot();
+  const interactionState = deps.interactionManager.getSnapshot(scope);
   if (interactionState?.kind !== "rename") {
-    deps.renameManager.clear();
+    deps.renameManager.clear(scope);
     await ctx.reply(t("rename.inactive"));
     return true;
   }
 
-  const sessionInfo = deps.renameManager.getSessionInfo();
+  const sessionInfo = deps.renameManager.getSessionInfo(scope);
   if (!sessionInfo) {
-    clearRenameInteraction(deps, "rename_missing_session_info");
-    deps.renameManager.clear();
+    clearRenameInteraction(deps, "rename_missing_session_info", scope);
+    deps.renameManager.clear(scope);
     // Answer here: returning false would send the new title to OpenCode as a prompt.
     await ctx.reply(t("rename.inactive"));
     return true;
@@ -128,7 +131,7 @@ export async function handleRenameTextAnswer(
       });
     }
 
-    const messageId = deps.renameManager.getMessageId();
+    const messageId = deps.renameManager.getMessageId(scope);
     if (messageId && ctx.chat) {
       await ctx.api.deleteMessage(ctx.chat.id, messageId).catch(() => {});
     }
@@ -141,7 +144,7 @@ export async function handleRenameTextAnswer(
     await ctx.reply(t("rename.error"));
   }
 
-  clearRenameInteraction(deps, "rename_completed");
-  deps.renameManager.clear();
+  clearRenameInteraction(deps, "rename_completed", scope);
+  deps.renameManager.clear(scope);
   return true;
 }

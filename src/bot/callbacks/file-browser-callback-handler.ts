@@ -34,6 +34,7 @@ import {
 import { promptAttachment } from "../../app/managers/prompt-attachment-manager.js";
 import { toRelativePath } from "../../app/services/prompt-attachment-service.js";
 import { ATTACHMENT_CANCEL_CALLBACK } from "./prompt-attachment-callback-handler.js";
+import { getInteractionScope } from "../middleware/interaction-scope.js";
 import {
   buildOpenRootsKeyboard,
   clearLsPathIndex,
@@ -325,7 +326,7 @@ async function attachFileAndClose(
   promptAttachment.set(filePath, projectRoot);
 
   await ctx.answerCallbackQuery();
-  clearActiveInlineMenu("ls_attached", deps);
+  clearActiveInlineMenu("ls_attached", ctx, deps);
   clearLsPathIndex();
   await ctx.deleteMessage().catch(() => {});
 
@@ -337,11 +338,14 @@ async function attachFileAndClose(
 
   // Wait for the prompt the file belongs to: "mixed" lets the text and the cancel button
   // through while blocking commands, menus, and non-text messages.
-  deps.interactionManager.start({
-    kind: "custom",
-    expectedInput: "mixed",
-    metadata: { flow: "attachment" },
-  });
+  deps.interactionManager.start(
+    {
+      kind: "custom",
+      expectedInput: "mixed",
+      metadata: { flow: "attachment" },
+    },
+    getInteractionScope(ctx),
+  );
 
   logger.info(`[PromptAttachment] Attached from /ls: ${filePath}`);
 }
@@ -357,7 +361,7 @@ async function downloadFileAndClose(
     return;
   }
 
-  clearActiveInlineMenu("ls_downloaded", deps);
+  clearActiveInlineMenu("ls_downloaded", ctx, deps);
   clearLsPathIndex();
   await ctx.deleteMessage().catch(() => {});
 }

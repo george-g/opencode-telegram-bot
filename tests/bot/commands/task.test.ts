@@ -142,10 +142,13 @@ beforeEach(() => {
   container = createTestAppContainer();
 });
 
+/** The scope every context in this file resolves to: chat 777 with no forum topic. */
+const SCOPE = "777:no-thread";
+
 describe("bot/commands/task", () => {
   beforeEach(() => {
-    container.interactionManager.clear("test_setup");
-    container.taskCreationManager.clear();
+    container.interactionManager.clear("test_setup", SCOPE);
+    container.taskCreationManager.clear(SCOPE);
 
     mocked.currentProject = {
       id: "project-1",
@@ -182,8 +185,8 @@ describe("bot/commands/task", () => {
     expect(ctx.reply).toHaveBeenCalledWith(t("task.prompt.schedule"), {
       reply_markup: expect.any(Object),
     });
-    expect(container.taskCreationManager.isWaitingForSchedule()).toBe(true);
-    expect(container.interactionManager.getSnapshot()).toMatchObject({
+    expect(container.taskCreationManager.isWaitingForSchedule(SCOPE)).toBe(true);
+    expect(container.interactionManager.getSnapshot(SCOPE)).toMatchObject({
       kind: "task",
       expectedInput: "text",
       metadata: {
@@ -203,8 +206,8 @@ describe("bot/commands/task", () => {
 
     expect(mocked.getMissingFolderNoticeMock).toHaveBeenCalledWith("D:\\Projects\\Repo");
     expect(ctx.reply).toHaveBeenCalledWith("folder gone notice");
-    expect(container.taskCreationManager.isActive()).toBe(false);
-    expect(container.interactionManager.getSnapshot()).toBeNull();
+    expect(container.taskCreationManager.isActive(SCOPE)).toBe(false);
+    expect(container.interactionManager.getSnapshot(SCOPE)).toBeNull();
   });
 
   it("does not start flow when task limit is reached", async () => {
@@ -216,8 +219,8 @@ describe("bot/commands/task", () => {
     await taskCommand(ctx as never, createDeps());
 
     expect(ctx.reply).toHaveBeenCalledWith(t("task.limit_reached", { limit: "1" }));
-    expect(container.taskCreationManager.isActive()).toBe(false);
-    expect(container.interactionManager.getSnapshot()).toBeNull();
+    expect(container.taskCreationManager.isActive(SCOPE)).toBe(false);
+    expect(container.interactionManager.getSnapshot(SCOPE)).toBeNull();
   });
 
   it("parses schedule and switches flow to prompt input", async () => {
@@ -243,8 +246,8 @@ describe("bot/commands/task", () => {
     expect(previewCall[0]).toContain(t("task.kind.cron"));
     expect(previewCall[0]).toContain(t("task.prompt.body"));
     expect(previewCall[1]).toEqual(expect.objectContaining({ reply_markup: expect.any(Object) }));
-    expect(container.taskCreationManager.isWaitingForPrompt()).toBe(true);
-    expect(container.interactionManager.getSnapshot()).toMatchObject({
+    expect(container.taskCreationManager.isWaitingForPrompt(SCOPE)).toBe(true);
+    expect(container.interactionManager.getSnapshot(SCOPE)).toMatchObject({
       kind: "task",
       expectedInput: "mixed",
       metadata: {
@@ -296,8 +299,8 @@ describe("bot/commands/task", () => {
     expect(successCall[0]).toContain("openai/gpt-5 (default)");
     expect(successCall[0]).toContain("Every day at 17:00");
     expect(successCall[0]).toContain("Cron: 0 17 * * *");
-    expect(container.taskCreationManager.isActive()).toBe(false);
-    expect(container.interactionManager.getSnapshot()).toBeNull();
+    expect(container.taskCreationManager.isActive(SCOPE)).toBe(false);
+    expect(container.interactionManager.getSnapshot(SCOPE)).toBeNull();
   });
 
   it("stops task save when limit is reached before final step", async () => {
@@ -314,8 +317,8 @@ describe("bot/commands/task", () => {
     expect(mocked.addScheduledTaskMock).not.toHaveBeenCalled();
     expect(mocked.registerTaskMock).not.toHaveBeenCalled();
     expect(ctx.reply).toHaveBeenCalledWith(t("task.limit_reached", { limit: "1" }));
-    expect(container.taskCreationManager.isActive()).toBe(false);
-    expect(container.interactionManager.getSnapshot()).toBeNull();
+    expect(container.taskCreationManager.isActive(SCOPE)).toBe(false);
+    expect(container.interactionManager.getSnapshot(SCOPE)).toBeNull();
   });
 
   it("restarts schedule step when retry button is pressed", async () => {
@@ -332,8 +335,8 @@ describe("bot/commands/task", () => {
     expect(ctx.reply).toHaveBeenCalledWith(t("task.prompt.schedule"), {
       reply_markup: expect.any(Object),
     });
-    expect(container.taskCreationManager.isWaitingForSchedule()).toBe(true);
-    expect(container.interactionManager.getSnapshot()).toMatchObject({
+    expect(container.taskCreationManager.isWaitingForSchedule(SCOPE)).toBe(true);
+    expect(container.interactionManager.getSnapshot(SCOPE)).toMatchObject({
       kind: "task",
       expectedInput: "text",
       metadata: {
@@ -353,8 +356,8 @@ describe("bot/commands/task", () => {
       text: t("common.cancelled"),
     });
     expect(ctx.reply).not.toHaveBeenCalled();
-    expect(container.taskCreationManager.isActive()).toBe(false);
-    expect(container.interactionManager.getSnapshot()).toBeNull();
+    expect(container.taskCreationManager.isActive(SCOPE)).toBe(false);
+    expect(container.interactionManager.getSnapshot(SCOPE)).toBeNull();
   });
 
   it("rejects schedules more frequent than every 5 minutes", async () => {
@@ -378,6 +381,6 @@ describe("bot/commands/task", () => {
     ];
     expect(errorCall[0]).toContain(t("task.schedule_too_frequent"));
     expect(errorCall[1]).toEqual(expect.objectContaining({ reply_markup: expect.any(Object) }));
-    expect(container.taskCreationManager.isWaitingForSchedule()).toBe(true);
+    expect(container.taskCreationManager.isWaitingForSchedule(SCOPE)).toBe(true);
   });
 });

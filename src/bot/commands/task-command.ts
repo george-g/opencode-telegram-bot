@@ -18,6 +18,7 @@ import {
   type ScheduledTask,
 } from "../../app/types/scheduled-task.js";
 import { logger } from "../../utils/logger.js";
+import { getInteractionScope } from "../middleware/interaction-scope.js";
 
 const TASK_PROMPT_PREVIEW_LENGTH = 100;
 
@@ -34,17 +35,17 @@ interface TaskInteractionMetadata {
   previewMessageId?: number;
 }
 
-function clearTaskInteraction(deps: TaskCommandDeps, reason: string): void {
-  const state = deps.interactionManager.getSnapshot();
+function clearTaskInteraction(deps: TaskCommandDeps, reason: string, scope: string): void {
+  const state = deps.interactionManager.getSnapshot(scope);
   if (state?.kind === "task") {
-    deps.interactionManager.clear(reason);
+    deps.interactionManager.clear(reason, scope);
   }
 }
 
-function clearTaskFlow(deps: TaskCommandDeps, reason: string): void {
+function clearTaskFlow(deps: TaskCommandDeps, reason: string, scope: string): void {
   // Clear the slot first so the log keeps the specific reason.
-  clearTaskInteraction(deps, reason);
-  deps.taskCreationManager.clear();
+  clearTaskInteraction(deps, reason, scope);
+  deps.taskCreationManager.clear(scope);
 }
 
 function isTaskLimitReached(): boolean {
@@ -299,6 +300,7 @@ export async function taskCommand(
   ctx: CommandContext<Context>,
   deps: TaskCommandDeps,
 ): Promise<void> {
+  const scope = getInteractionScope(ctx);
   const currentProject = getCurrentProject();
   if (!currentProject) {
     await ctx.reply(t("bot.project_not_selected"));
@@ -324,20 +326,24 @@ export async function taskCommand(
     currentProject.worktree,
     currentModel,
     currentAgent,
+    scope,
   );
-  deps.interactionManager.transition({
-    expectedInput: "text",
-    metadata: buildTaskInteractionMetadata(
-      "awaiting_schedule",
-      currentProject.id,
-      currentProject.worktree,
-    ),
-  });
+  deps.interactionManager.transition(
+    {
+      expectedInput: "text",
+      metadata: buildTaskInteractionMetadata(
+        "awaiting_schedule",
+        currentProject.id,
+        currentProject.worktree,
+      ),
+    },
+    scope,
+  );
 
   const message = await ctx.reply(t("task.prompt.schedule"), {
     reply_markup: buildCancelKeyboard(),
   });
-  deps.taskCreationManager.setScheduleRequestMessageId(message.message_id);
+  deps.taskCreationManager.setScheduleRequestMessageId(message.message_id, scope);
 }
 
 export async function handleTaskTextInput(ctx: Context, deps: TaskCommandDeps): Promise<boolean> {
@@ -346,45 +352,49 @@ export async function handleTaskTextInput(ctx: Context, deps: TaskCommandDeps): 
     return false;
   }
 
-  if (!deps.taskCreationManager.isActive()) {
+  const scope = getInteractionScope(ctx);
+  if (!deps.taskCreationManager.isActive(scope)) {
     return false;
   }
 
-  const interactionState = deps.interactionManager.getSnapshot();
+  const interactionState = deps.interactionManager.getSnapshot(scope);
   if (!isTaskInteraction(interactionState)) {
-    deps.taskCreationManager.clear();
+    deps.taskCreationManager.clear(scope);
     await ctx.reply(t("task.inactive"));
     return true;
   }
 
-  const flowState = deps.taskCreationManager.getState();
+  const flowState = deps.taskCreationManager.getState(scope);
   if (!flowState) {
-    clearTaskFlow(deps, "task_state_missing");
+    clearTaskFlow(deps, "task_state_missing", scope);
     await ctx.reply(t("task.inactive"));
     return true;
   }
 
-  if (deps.taskCreationManager.isParsingSchedule()) {
+  if (deps.taskCreationManager.isParsingSchedule(scope)) {
     await ctx.reply(t("task.parse.in_progress"));
     return true;
   }
 
-  if (deps.taskCreationManager.isWaitingForSchedule()) {
+  if (deps.taskCreationManager.isWaitingForSchedule(scope)) {
     const scheduleText = text.trim();
     if (!scheduleText) {
       await ctx.reply(t("task.schedule_empty"));
       return true;
     }
 
-    deps.taskCreationManager.markScheduleParsing();
-    deps.interactionManager.transition({
-      expectedInput: "text",
-      metadata: buildTaskInteractionMetadata(
-        "parsing_schedule",
-        flowState.projectId,
-        flowState.projectWorktree,
-      ),
-    });
+    deps.taskCreationManager.markScheduleParsing(scope);
+    deps.interactionManager.transition(
+      {
+        expectedInput: "text",
+        metadata: buildTaskInteractionMetadata(
+          "parsing_schedule",
+          flowState.projectId,
+          flowState.projectWorktree,
+        ),
+      },
+      scope,
+    );
 
     const parsingMessage = await ctx.reply(t("task.parse.in_progress"));
 
@@ -406,41 +416,48 @@ export async function handleTaskTextInput(ctx: Context, deps: TaskCommandDeps): 
         scheduleText,
         parsedSchedule,
         previewMessage.message_id,
+        scope,
       );
-      deps.interactionManager.transition({
-        expectedInput: "mixed",
-        metadata: buildTaskInteractionMetadata(
-          "awaiting_prompt",
-          flowState.projectId,
-          flowState.projectWorktree,
-          previewMessage.message_id,
-        ),
-      });
-      deps.taskCreationManager.setPromptRequestMessageId(previewMessage.message_id);
+      deps.interactionManager.transition(
+        {
+          expectedInput: "mixed",
+          metadata: buildTaskInteractionMetadata(
+            "awaiting_prompt",
+            flowState.projectId,
+            flowState.projectWorktree,
+            previewMessage.message_id,
+          ),
+        },
+        scope,
+      );
+      deps.taskCreationManager.setPromptRequestMessageId(previewMessage.message_id, scope);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : t("common.unknown_error");
       logger.warn(`[TaskCommand] Failed to parse task schedule: ${errorMessage}`);
       await deleteMessageIfPresent(ctx, flowState.scheduleRequestMessageId);
-      deps.taskCreationManager.resetSchedule();
-      deps.interactionManager.transition({
-        expectedInput: "text",
-        metadata: buildTaskInteractionMetadata(
-          "awaiting_schedule",
-          flowState.projectId,
-          flowState.projectWorktree,
-        ),
-      });
+      deps.taskCreationManager.resetSchedule(scope);
+      deps.interactionManager.transition(
+        {
+          expectedInput: "text",
+          metadata: buildTaskInteractionMetadata(
+            "awaiting_schedule",
+            flowState.projectId,
+            flowState.projectWorktree,
+          ),
+        },
+        scope,
+      );
       await deleteMessageIfPresent(ctx, parsingMessage.message_id);
       const errorReply = await ctx.reply(t("task.parse_error", { message: errorMessage }), {
         reply_markup: buildCancelKeyboard(),
       });
-      deps.taskCreationManager.setScheduleRequestMessageId(errorReply.message_id);
+      deps.taskCreationManager.setScheduleRequestMessageId(errorReply.message_id, scope);
     }
 
     return true;
   }
 
-  if (!deps.taskCreationManager.isWaitingForPrompt()) {
+  if (!deps.taskCreationManager.isWaitingForPrompt(scope)) {
     return false;
   }
 
@@ -451,7 +468,7 @@ export async function handleTaskTextInput(ctx: Context, deps: TaskCommandDeps): 
   }
 
   if (!flowState.parsedSchedule || !flowState.scheduleText) {
-    clearTaskFlow(deps, "task_missing_schedule_before_save");
+    clearTaskFlow(deps, "task_missing_schedule_before_save", scope);
     await ctx.reply(t("task.inactive"));
     return true;
   }
@@ -460,7 +477,7 @@ export async function handleTaskTextInput(ctx: Context, deps: TaskCommandDeps): 
     if (isTaskLimitReached()) {
       await deleteMessageIfPresent(ctx, flowState.previewMessageId);
       await deleteMessageIfPresent(ctx, flowState.promptRequestMessageId);
-      clearTaskFlow(deps, "task_limit_reached_before_save");
+      clearTaskFlow(deps, "task_limit_reached_before_save", scope);
       await ctx.reply(t("task.limit_reached", { limit: String(config.bot.taskLimit) }));
       return true;
     }
@@ -479,7 +496,7 @@ export async function handleTaskTextInput(ctx: Context, deps: TaskCommandDeps): 
     deps.scheduledTaskRuntime.registerTask(task);
     await deleteMessageIfPresent(ctx, flowState.previewMessageId);
     await deleteMessageIfPresent(ctx, flowState.promptRequestMessageId);
-    clearTaskFlow(deps, "task_completed");
+    clearTaskFlow(deps, "task_completed", scope);
     await ctx.reply(formatTaskCreatedMessage(task));
   } catch (error) {
     logger.error("[TaskCommand] Failed to save scheduled task", error);

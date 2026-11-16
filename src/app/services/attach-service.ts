@@ -6,6 +6,11 @@ import type { PermissionPromptChange, PermissionRequest } from "../types/permiss
 import type { SessionInfo } from "../types/session.js";
 import { clearSession, getCurrentSession } from "./session-service.js";
 import { getCurrentProject } from "../stores/settings-store.js";
+import { getTopicBindingBySession } from "../stores/topic-binding-store.js";
+import {
+  interactionScopeFromDestination,
+  interactionScopeKey,
+} from "../types/interaction-scope.js";
 import { resolveSessionParentChain } from "./recent-sessions-service.js";
 import { resetStreamThrottle } from "../../bot/streaming/stream-throttle.js";
 import { logger } from "../../utils/logger.js";
@@ -28,19 +33,25 @@ export interface AttachPresentationDeps {
   /** Draws the dashboard prepared last, once the session's updates are followed. */
   showPinnedSession(): Promise<void>;
   syncAttachState(attached: boolean, busy: boolean): Promise<void>;
-  showCurrentQuestion(api: Bot<Context>["api"], chatId: number): Promise<void>;
+  showCurrentQuestion(api: Bot<Context>["api"], chatId: number, scope: string): Promise<void>;
   showPermissionRequest(
     api: Bot<Context>["api"],
     chatId: number,
     request: PermissionRequest,
+    scope: string,
   ): Promise<void>;
   applyPermissionPromptChanges(
     api: Bot<Context>["api"],
     chatId: number,
     changes: PermissionPromptChange[],
+    scope: string,
   ): Promise<void>;
-  closeQuestionSettledOutside(api: Bot<Context>["api"], chatId: number): Promise<void>;
-  closeQuestionNotAnswered(api: Bot<Context>["api"], chatId: number): Promise<void>;
+  closeQuestionSettledOutside(
+    api: Bot<Context>["api"],
+    chatId: number,
+    scope: string,
+  ): Promise<void>;
+  closeQuestionNotAnswered(api: Bot<Context>["api"], chatId: number, scope: string): Promise<void>;
 }
 
 type PendingQuestion = NonNullable<
@@ -176,6 +187,18 @@ async function belongsToFollowedSession(
  * Shows the first pending poll of the followed session or its subagents and queues the
  * rest, in OpenCode's order. True when a poll was shown or queued.
  */
+/**
+ * The interaction scope of a session the attach restores: its bound forum topic, or
+ * the chat's no-thread scope. The attach runs off an update or an event, so it
+ * resolves the scope from the session and the chat instead of a context.
+ */
+function restoreScope(sessionId: string, chatId: number): string {
+  const binding = getTopicBindingBySession(sessionId);
+  return binding
+    ? interactionScopeFromDestination({ chatId: binding.chatId, messageThreadId: binding.threadId })
+    : interactionScopeKey(chatId, null);
+}
+
 async function restorePendingQuestions(
   deps: AttachRestoreDeps,
   bot: Bot<Context>,
@@ -189,18 +212,25 @@ async function restorePendingQuestions(
     return false;
   }
 
+  const scope = restoreScope(sessionId, chatId);
   let restored = false;
   for (const request of pending) {
     if (isAlreadyTracked(request.id)) continue;
     if (!(await belongsToFollowedSession(deps, request.sessionID, sessionId, directory))) continue;
 
     const shown =
-      !deps.questionManager.isActive() &&
-      deps.questionManager.startQuestions(request.questions, request.id, request.sessionID);
+      !deps.questionManager.isActive(scope) &&
+      deps.questionManager.startQuestions(request.questions, request.id, request.sessionID, scope);
     if (shown) {
-      await attachPresentation.showCurrentQuestion(bot.api, chatId);
+      await attachPresentation.showCurrentQuestion(bot.api, chatId, scope);
     } else {
-      deps.interactionManager.waitQuestion(request.questions, request.id, request.sessionID);
+      deps.interactionManager.waitQuestion(
+        request.questions,
+        request.id,
+        request.sessionID,
+        {},
+        scope,
+      );
     }
     restored = true;
   }
@@ -227,11 +257,12 @@ async function restorePendingPermissions(
     return 0;
   }
 
+  const scope = restoreScope(sessionId, chatId);
   for (const request of pendingPermissions) {
-    if (deps.questionManager.isActive()) {
-      deps.interactionManager.waitPermission(request);
+    if (deps.questionManager.isActive(scope)) {
+      deps.interactionManager.waitPermission(request, {}, scope);
     } else {
-      await attachPresentation.showPermissionRequest(bot.api, chatId, request);
+      await attachPresentation.showPermissionRequest(bot.api, chatId, request, scope);
     }
   }
 
@@ -246,11 +277,14 @@ interface TrackedRequestsSnapshot {
   waitingPermissionIds: string[];
 }
 
-function snapshotTrackedRequests(deps: RestoreAfterReconnectDeps): TrackedRequestsSnapshot {
+function snapshotTrackedRequests(
+  deps: RestoreAfterReconnectDeps,
+  scope: string,
+): TrackedRequestsSnapshot {
   return {
-    shownQuestionId: deps.questionManager.getRequestID(),
+    shownQuestionId: deps.questionManager.getRequestID(scope),
     waitingQuestionIds: deps.interactionManager.getWaitingQuestionRequestIds(),
-    shownPermissionIds: deps.permissionManager.getSettleableRequestIds(),
+    shownPermissionIds: deps.permissionManager.getSettleableRequestIds(scope),
     waitingPermissionIds: deps.interactionManager.getWaitingPermissionRequestIds(),
   };
 }
@@ -265,6 +299,7 @@ function snapshotTrackedRequests(deps: RestoreAfterReconnectDeps): TrackedReques
  */
 async function settleRequestsGoneWhileDisconnected(
   deps: RestoreAfterReconnectDeps,
+  scope: string,
   tracked: TrackedRequestsSnapshot,
   questions: PendingQuestion[] | null,
   permissions: PendingPermission[] | null,
@@ -280,14 +315,14 @@ async function settleRequestsGoneWhileDisconnected(
     if (
       shownId &&
       !pendingIds.has(shownId) &&
-      deps.questionManager.getRequestID() === shownId &&
-      !deps.questionManager.isSettlingFromTelegram() &&
+      deps.questionManager.getRequestID(scope) === shownId &&
+      !deps.questionManager.isSettlingFromTelegram(scope) &&
       attachPresentation
     ) {
       if (serverRestarted) {
-        await attachPresentation.closeQuestionNotAnswered(deps.bot.api, deps.chatId);
+        await attachPresentation.closeQuestionNotAnswered(deps.bot.api, deps.chatId, scope);
       } else {
-        await attachPresentation.closeQuestionSettledOutside(deps.bot.api, deps.chatId);
+        await attachPresentation.closeQuestionSettledOutside(deps.bot.api, deps.chatId, scope);
       }
     }
   }
@@ -298,30 +333,39 @@ async function settleRequestsGoneWhileDisconnected(
       if (!pendingIds.has(requestID)) deps.interactionManager.dropWaitingPermission(requestID);
     }
 
-    const settleable = new Set(deps.permissionManager.getSettleableRequestIds());
+    const settleable = new Set(deps.permissionManager.getSettleableRequestIds(scope));
     const changes = tracked.shownPermissionIds
       .filter((requestID) => !pendingIds.has(requestID) && settleable.has(requestID))
       .flatMap((requestID) =>
-        deps.permissionManager.settleRequest(requestID, null, serverRestarted),
+        deps.permissionManager.settleRequest(requestID, null, serverRestarted, scope),
       );
     if (changes.length > 0 && attachPresentation) {
-      await attachPresentation.applyPermissionPromptChanges(deps.bot.api, deps.chatId, changes);
+      await attachPresentation.applyPermissionPromptChanges(
+        deps.bot.api,
+        deps.chatId,
+        changes,
+        scope,
+      );
     }
   }
 }
 
 /** A poll already on screen or waiting, so a restore must not show it again. */
-function isQuestionTracked(deps: AttachRestoreDeps, requestID: string): boolean {
+function isQuestionTracked(deps: AttachRestoreDeps, scope: string, requestID: string): boolean {
   return (
-    deps.questionManager.getRequestID() === requestID ||
+    deps.questionManager.getRequestID(scope) === requestID ||
     deps.interactionManager.isWaitingOrReleasing(requestID)
   );
 }
 
 /** A permission already on screen, settled or waiting, so a restore must not show it again. */
-function isPermissionTracked(deps: AttachRestoreDeps, request: PermissionRequest): boolean {
+function isPermissionTracked(
+  deps: AttachRestoreDeps,
+  scope: string,
+  request: PermissionRequest,
+): boolean {
   return (
-    deps.permissionManager.hasRequest(request.id) ||
+    deps.permissionManager.hasRequest(request.id, scope) ||
     deps.permissionManager.isResolved(request.id) ||
     deps.interactionManager.isWaitingOrReleasing(request.id)
   );
@@ -390,10 +434,12 @@ export async function attachToSession(deps: AttachSessionDeps): Promise<AttachSe
   let restoredQuestion = false;
   let restoredPermissions = 0;
 
+  const scope = restoreScope(session.id, chatId);
+
   if (
     (!alreadyAttached || forceFullRestore) &&
-    !questionManager.isActive() &&
-    !permissionManager.isActive()
+    !questionManager.isActive(scope) &&
+    !permissionManager.isActive(scope)
   ) {
     const pendingQuestions = await listPendingQuestions(session.directory);
     restoredQuestion = pendingQuestions
@@ -404,7 +450,7 @@ export async function attachToSession(deps: AttachSessionDeps): Promise<AttachSe
           session.id,
           session.directory,
           pendingQuestions,
-          (requestID) => isQuestionTracked(deps, requestID),
+          (requestID) => isQuestionTracked(deps, scope, requestID),
         )
       : false;
 
@@ -417,7 +463,7 @@ export async function attachToSession(deps: AttachSessionDeps): Promise<AttachSe
           session.id,
           session.directory,
           pendingPermissions,
-          (request) => isPermissionTracked(deps, request),
+          (request) => isPermissionTracked(deps, scope, request),
         )
       : 0;
   }
@@ -574,7 +620,8 @@ export async function restorePendingInteractionsAfterReconnect(
     return;
   }
 
-  const tracked = snapshotTrackedRequests(deps);
+  const scope = restoreScope(attached.sessionId, deps.chatId);
+  const tracked = snapshotTrackedRequests(deps, scope);
   const [pendingQuestions, pendingPermissions] = await Promise.all([
     listPendingQuestions(attached.directory),
     listPendingPermissions(attached.directory),
@@ -590,6 +637,7 @@ export async function restorePendingInteractionsAfterReconnect(
 
   await settleRequestsGoneWhileDisconnected(
     deps,
+    scope,
     tracked,
     pendingQuestions,
     pendingPermissions,
@@ -604,7 +652,7 @@ export async function restorePendingInteractionsAfterReconnect(
         attached.sessionId,
         attached.directory,
         pendingQuestions,
-        (requestID) => isQuestionTracked(deps, requestID),
+        (requestID) => isQuestionTracked(deps, scope, requestID),
       )
     : false;
 
@@ -616,7 +664,7 @@ export async function restorePendingInteractionsAfterReconnect(
         attached.sessionId,
         attached.directory,
         pendingPermissions,
-        (request) => isPermissionTracked(deps, request),
+        (request) => isPermissionTracked(deps, scope, request),
       )
     : 0;
 

@@ -12,6 +12,7 @@ import {
 import { t } from "../../i18n/index.js";
 import { logger } from "../../utils/logger.js";
 import { alert, cancelMenu, failure } from "./feedback.js";
+import { getInteractionScope } from "../middleware/interaction-scope.js";
 import {
   appendInlineMenuCancelButton,
   ensureActiveInlineMenu,
@@ -100,9 +101,10 @@ async function selectProject(
   projectId: string,
   search?: Record<string, unknown>,
 ): Promise<boolean> {
+  const scope = getInteractionScope(ctx);
   try {
     const projects = await getProjects();
-    if (search && !isSameSearch(deps, search)) {
+    if (search && !isSameSearch(deps, scope, search)) {
       await ctx.answerCallbackQuery().catch(() => {});
       return true;
     }
@@ -128,7 +130,7 @@ async function selectProject(
 
     await ctx.deleteMessage();
   } catch (error) {
-    if (search && !isSameSearch(deps, search)) {
+    if (search && !isSameSearch(deps, scope, search)) {
       await ctx.answerCallbackQuery().catch(() => {});
       return true;
     }
@@ -140,24 +142,31 @@ async function selectProject(
   return true;
 }
 
-function searchState(deps: ProjectSelectDeps) {
-  const state = deps.interactionManager.getSnapshot();
+function searchState(deps: ProjectSelectDeps, scope: string) {
+  const state = deps.interactionManager.getSnapshot(scope);
   return state?.kind === "custom" && state.metadata.flow === "project-search"
     ? state.metadata
     : null;
 }
 
-function startSearch(deps: ProjectSelectDeps): void {
-  deps.interactionManager.start({
-    kind: "custom",
-    expectedInput: "text",
-    allowedCommands: [],
-    metadata: { flow: "project-search", stage: "input", token: Symbol("project-search") },
-  });
+function startSearch(deps: ProjectSelectDeps, scope: string): void {
+  deps.interactionManager.start(
+    {
+      kind: "custom",
+      expectedInput: "text",
+      allowedCommands: [],
+      metadata: { flow: "project-search", stage: "input", token: Symbol("project-search") },
+    },
+    scope,
+  );
 }
 
-function isSameSearch(deps: ProjectSelectDeps, state: Record<string, unknown>): boolean {
-  const active = searchState(deps);
+function isSameSearch(
+  deps: ProjectSelectDeps,
+  scope: string,
+  state: Record<string, unknown>,
+): boolean {
+  const active = searchState(deps, scope);
   return !!active && active.stage === state.stage && active.token === state.token;
 }
 
@@ -165,30 +174,34 @@ export async function handleProjectSearchTextInput(
   ctx: Context,
   deps: ProjectSelectDeps,
 ): Promise<boolean> {
-  const state = searchState(deps);
+  const scope = getInteractionScope(ctx);
+  const state = searchState(deps, scope);
   if (!state || state.stage !== "input" || ctx.message?.text === undefined) return false;
   const query = ctx.message.text;
   if (!query.trim()) return true;
   try {
     const projects = await filterProjectsForSearch(await getListedProjects(), query);
     const view = await buildProjectSearchView(projects, query, 0);
-    if (!isSameSearch(deps, state)) return true;
+    if (!isSameSearch(deps, scope, state)) return true;
     const sent = await ctx.reply(view.text, { reply_markup: view.keyboard });
-    if (!isSameSearch(deps, state)) return true;
-    deps.interactionManager.transition({
-      expectedInput: "callback",
-      metadata: {
-        ...state,
-        stage: "results",
-        query,
-        messageId: sent.message_id,
-        ids: projects.map((p) => p.id),
+    if (!isSameSearch(deps, scope, state)) return true;
+    deps.interactionManager.transition(
+      {
+        expectedInput: "callback",
+        metadata: {
+          ...state,
+          stage: "results",
+          query,
+          messageId: sent.message_id,
+          ids: projects.map((p) => p.id),
+        },
       },
-    });
+      scope,
+    );
   } catch (error) {
     logger.error("[Projects] Error searching projects:", error);
-    if (isSameSearch(deps, state)) {
-      deps.interactionManager.clear("project_search_error");
+    if (isSameSearch(deps, scope, state)) {
+      deps.interactionManager.clear("project_search_error", scope);
       await ctx.reply(t("projects.fetch_error"));
     }
   }
@@ -206,19 +219,20 @@ export async function handleProjectSearchCallback(
     await replyBusyBlocked(ctx);
     return true;
   }
+  const scope = getInteractionScope(ctx);
   if (data === PROJECT_SEARCH_CALLBACK) {
     if (!(await ensureActiveInlineMenu(ctx, "project", deps))) return true;
-    const initial = deps.interactionManager.getSnapshot();
+    const initial = deps.interactionManager.getSnapshot(scope);
     await ctx.answerCallbackQuery().catch(() => {});
     await ctx.deleteMessage().catch(() => {});
-    const current = deps.interactionManager.getSnapshot();
+    const current = deps.interactionManager.getSnapshot(scope);
     if (current?.kind !== "inline" || current.metadata.messageId !== initial?.metadata.messageId)
       return true;
-    startSearch(deps);
+    startSearch(deps, scope);
     await ctx.reply(t("projects.search.prompt"));
     return true;
   }
-  const state = searchState(deps);
+  const state = searchState(deps, scope);
   if (
     !state ||
     state.stage !== "results" ||
@@ -230,15 +244,15 @@ export async function handleProjectSearchCallback(
     return true;
   }
   if (data === PROJECT_SEARCH_CANCEL) {
-    deps.interactionManager.clear("project_search_cancelled");
+    deps.interactionManager.clear("project_search_cancelled", scope);
     await cancelMenu(ctx);
     return true;
   }
   if (data === PROJECT_SEARCH_AGAIN) {
     await ctx.answerCallbackQuery().catch(() => {});
     await ctx.deleteMessage().catch(() => {});
-    if (!isSameSearch(deps, state)) return true;
-    startSearch(deps);
+    if (!isSameSearch(deps, scope, state)) return true;
+    startSearch(deps, scope);
     await ctx.reply(t("projects.search.prompt"));
     return true;
   }
@@ -248,19 +262,22 @@ export async function handleProjectSearchCallback(
     try {
       const projects = await filterProjectsForSearch(await getListedProjects(), state.query);
       const view = await buildProjectSearchView(projects, state.query, Number(raw));
-      if (!isSameSearch(deps, state)) {
+      if (!isSameSearch(deps, scope, state)) {
         await ctx.answerCallbackQuery().catch(() => {});
         return true;
       }
       await ctx.editMessageText(view.text, { reply_markup: view.keyboard });
-      if (!isSameSearch(deps, state)) {
+      if (!isSameSearch(deps, scope, state)) {
         await ctx.answerCallbackQuery().catch(() => {});
         return true;
       }
-      deps.interactionManager.transition({
-        expectedInput: "callback",
-        metadata: { ...state, ids: projects.map((p) => p.id) },
-      });
+      deps.interactionManager.transition(
+        {
+          expectedInput: "callback",
+          metadata: { ...state, ids: projects.map((p) => p.id) },
+        },
+        scope,
+      );
       await ctx.answerCallbackQuery();
     } catch (error) {
       logger.error("[Projects] Error switching search page:", error);

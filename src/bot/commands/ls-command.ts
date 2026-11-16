@@ -7,6 +7,7 @@ import { isContainerRuntime } from "../../runtime/container.js";
 import { clearLsPathIndex, renderLsBrowseView } from "../menus/file-browser-menu.js";
 import { replyBusyBlocked } from "../messages/busy-blocked-renderer.js";
 import { rememberLsDirectory, resolveInitialLsDirectory } from "../callbacks/file-browser-callback-handler.js";
+import { getInteractionScope } from "../middleware/interaction-scope.js";
 
 export type LsCommandDeps = Pick<
   AppContainer,
@@ -61,12 +62,15 @@ export async function lsCommand(
   }
 
   const message = await ctx.reply(view.text, { parse_mode: "HTML", reply_markup: view.keyboard });
-  deps.interactionManager.start({
-    kind: "inline",
-    expectedInput: "callback",
-    metadata: {
-      menuKind: "ls",
-      messageId: message.message_id,
+  deps.interactionManager.start(
+    {
+      kind: "inline",
+      expectedInput: "callback",
+      metadata: {
+        menuKind: "ls",
+        messageId: message.message_id,
+      },
     },
-  });
+    getInteractionScope(ctx),
+  );
 }

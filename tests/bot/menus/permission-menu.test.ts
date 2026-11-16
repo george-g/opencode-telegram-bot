@@ -41,6 +41,9 @@ beforeEach(() => {
   deps = createTestAppContainer();
 });
 
+/** The scope every prompt in this file resolves to: chat 42 with no forum topic. */
+const SCOPE = "42:no-thread";
+
 describe("bot/menus/permission-menu", () => {
   function editApi(): { api: Context["api"]; editMessageText: ReturnType<typeof vi.fn> } {
     const editMessageText = vi.fn().mockResolvedValue(true);
@@ -138,10 +141,10 @@ describe("bot/menus/permission-menu", () => {
   it("shows the prompt and opens the permission slot", async () => {
     const { api, deleteMessage } = createApi(() => {});
 
-    await showPermissionRequest(api, 42, PERMISSION, deps);
+    await showPermissionRequest(api, 42, PERMISSION, deps, undefined, SCOPE);
 
-    expect(deps.permissionManager.getRequestID(201)).toBe("perm-1");
-    expect(deps.interactionManager.getSnapshot()?.kind).toBe("permission");
+    expect(deps.permissionManager.getRequestID(201, SCOPE)).toBe("perm-1");
+    expect(deps.interactionManager.getSnapshot(SCOPE)?.kind).toBe("permission");
     expect(deleteMessage).not.toHaveBeenCalled();
   });
 
@@ -151,14 +154,15 @@ describe("bot/menus/permission-menu", () => {
         [{ header: "Q", question: "Pick", options: [] }],
         "req-1",
         "session-1",
+        SCOPE,
       );
     });
 
-    await showPermissionRequest(api, 42, PERMISSION, deps);
+    await showPermissionRequest(api, 42, PERMISSION, deps, undefined, SCOPE);
 
     expect(deleteMessage).toHaveBeenCalledWith(42, 201);
-    expect(deps.permissionManager.isActive()).toBe(false);
-    expect(deps.questionManager.isActive()).toBe(true);
+    expect(deps.permissionManager.isActive(SCOPE)).toBe(false);
+    expect(deps.questionManager.isActive(SCOPE)).toBe(true);
     expect(deps.interactionManager.getWaitingKind()).toBe("permission");
   });
 
@@ -168,14 +172,15 @@ describe("bot/menus/permission-menu", () => {
         [{ header: "Q", question: "Pick", options: [] }],
         "req-1",
         "session-1",
+        SCOPE,
       );
       deps.interactionManager.reset("abort_command");
     });
 
-    await showPermissionRequest(api, 42, PERMISSION, deps);
+    await showPermissionRequest(api, 42, PERMISSION, deps, undefined, SCOPE);
 
     expect(deleteMessage).toHaveBeenCalledWith(42, 201);
-    expect(deps.permissionManager.isActive()).toBe(false);
+    expect(deps.permissionManager.isActive(SCOPE)).toBe(false);
     expect(deps.interactionManager.getWaitingKind()).toBeNull();
   });
 
@@ -185,11 +190,12 @@ describe("bot/menus/permission-menu", () => {
         [{ header: "Q", question: "Pick", options: [] }],
         "req-1",
         "session-1",
+        SCOPE,
       );
-      deps.permissionManager.settleRequest("perm-1", null);
+      deps.permissionManager.settleRequest("perm-1", null, false, SCOPE);
     });
 
-    await showPermissionRequest(api, 42, PERMISSION, deps);
+    await showPermissionRequest(api, 42, PERMISSION, deps, undefined, SCOPE);
 
     expect(deleteMessage).toHaveBeenCalledWith(42, 201);
     expect(deps.interactionManager.getWaitingKind()).toBeNull();
@@ -197,10 +203,10 @@ describe("bot/menus/permission-menu", () => {
 
   it("skips sending a request that is already stale", async () => {
     const { api, sendMessage } = createApi(() => {});
-    const generation = deps.permissionManager.getGeneration();
+    const generation = deps.permissionManager.getGeneration(SCOPE);
     deps.interactionManager.reset("abort_command");
 
-    await showPermissionRequest(api, 42, PERMISSION, deps, generation);
+    await showPermissionRequest(api, 42, PERMISSION, deps, generation, SCOPE);
 
     expect(sendMessage).not.toHaveBeenCalled();
   });
@@ -209,14 +215,14 @@ describe("bot/menus/permission-menu", () => {
     const { api, sendMessage } = createApi(() => {});
 
     await Promise.all([
-      showPermissionRequest(api, 42, PERMISSION, deps),
-      showPermissionRequest(api, 42, PERMISSION, deps),
-      showPermissionRequest(api, 42, PERMISSION, deps),
+      showPermissionRequest(api, 42, PERMISSION, deps, undefined, SCOPE),
+      showPermissionRequest(api, 42, PERMISSION, deps, undefined, SCOPE),
+      showPermissionRequest(api, 42, PERMISSION, deps, undefined, SCOPE),
     ]);
 
     expect(sendMessage).toHaveBeenCalledTimes(1);
-    expect(deps.permissionManager.getMessageIds()).toEqual([201]);
-    expect(deps.permissionManager.getRequestIDs(201)).toEqual(["perm-1"]);
+    expect(deps.permissionManager.getMessageIds(SCOPE)).toEqual([201]);
+    expect(deps.permissionManager.getRequestIDs(201, SCOPE)).toEqual(["perm-1"]);
   });
 
   it("groups an equivalent request shown while the first prompt is being sent", async () => {
@@ -224,12 +230,12 @@ describe("bot/menus/permission-menu", () => {
     vi.mocked(api.editMessageText).mockResolvedValue(true);
 
     await Promise.all([
-      showPermissionRequest(api, 42, PERMISSION, deps),
-      showPermissionRequest(api, 42, { ...PERMISSION, id: "perm-2" }, deps),
+      showPermissionRequest(api, 42, PERMISSION, deps, undefined, SCOPE),
+      showPermissionRequest(api, 42, { ...PERMISSION, id: "perm-2" }, deps, undefined, SCOPE),
     ]);
 
     expect(sendMessage).toHaveBeenCalledTimes(1);
-    expect(deps.permissionManager.getRequestIDs(201)).toEqual(["perm-1", "perm-2"]);
+    expect(deps.permissionManager.getRequestIDs(201, SCOPE)).toEqual(["perm-1", "perm-2"]);
   });
 
   it("lets a waiting show go on when the first send fails", async () => {
@@ -237,12 +243,12 @@ describe("bot/menus/permission-menu", () => {
     sendMessage.mockRejectedValueOnce(new Error("telegram down"));
 
     const results = await Promise.allSettled([
-      showPermissionRequest(api, 42, PERMISSION, deps),
-      showPermissionRequest(api, 42, PERMISSION, deps),
+      showPermissionRequest(api, 42, PERMISSION, deps, undefined, SCOPE),
+      showPermissionRequest(api, 42, PERMISSION, deps, undefined, SCOPE),
     ]);
 
     expect(results.map((result) => result.status)).toEqual(["rejected", "fulfilled"]);
     expect(sendMessage).toHaveBeenCalledTimes(2);
-    expect(deps.permissionManager.getMessageIds()).toEqual([201]);
+    expect(deps.permissionManager.getMessageIds(SCOPE)).toEqual([201]);
   });
 });

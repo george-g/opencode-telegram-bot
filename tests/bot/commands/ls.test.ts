@@ -158,6 +158,7 @@ describe("bot/commands/ls", () => {
         expectedInput: "callback",
         metadata: expect.objectContaining({ menuKind: "ls", messageId: 77 }),
       }),
+      "123:no-thread",
     );
   });
 
@@ -298,7 +299,11 @@ describe("bot/commands/ls", () => {
     expect(mocked.sendDownloadedFileMock).toHaveBeenCalledWith(callbackCtx, "/repo/project/README.md", {
       announce: false,
     });
-    expect(mocked.clearActiveInlineMenuMock).toHaveBeenCalledWith("ls_downloaded", expect.anything());
+    expect(mocked.clearActiveInlineMenuMock).toHaveBeenCalledWith(
+      "ls_downloaded",
+      expect.anything(),
+      expect.anything(),
+    );
     expect(callbackCtx.deleteMessage).toHaveBeenCalled();
   });
 

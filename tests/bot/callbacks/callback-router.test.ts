@@ -266,6 +266,7 @@ describe("bot/callbacks/callback-router", () => {
     expect(mocked.resetInteractionError).toHaveBeenCalledWith(
       "interaction",
       "callback_handler_error",
+      "2:no-thread",
     );
     expect(ctx.answerCallbackQuery).toHaveBeenCalledWith({ text: "callback.processing_error" });
   });
@@ -280,6 +281,7 @@ describe("bot/callbacks/callback-router", () => {
     expect(mocked.resetInteractionError).toHaveBeenCalledWith(
       "permission",
       "callback_handler_error",
+      "2:no-thread",
     );
   });
 
@@ -293,6 +295,7 @@ describe("bot/callbacks/callback-router", () => {
     expect(mocked.resetInteractionError).toHaveBeenCalledWith(
       "interaction",
       "callback_handler_error",
+      "2:no-thread",
     );
   });
 });

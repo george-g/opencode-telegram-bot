@@ -109,6 +109,9 @@ function createDeps() {
 
 let container: AppContainer;
 
+/** The scope the settings contexts resolve to: no chat named, so chat 0 and no thread. */
+const SCOPE = "0:no-thread";
+
 beforeEach(() => {
   container = createTestAppContainer();
 });
@@ -299,7 +302,7 @@ describe("bot/callbacks/settings-callback-handler", () => {
         menuKind: "settings",
         messageId: 10,
       },
-    });
+    }, SCOPE);
   }
 
   function createCallbackContext(data: string): Context {

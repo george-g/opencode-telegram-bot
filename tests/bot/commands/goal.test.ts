@@ -108,6 +108,9 @@ beforeEach(() => {
   mocked.model = { providerID: "selected", modelID: "chosen", variant: "high" };
 });
 
+/** The scope the goal contexts resolve to: chat 1 with no forum topic. */
+const SCOPE = "1:no-thread";
+
 describe("guided session goal", () => {
   it("uses the existing icon convention on input Cancel, Start and paused Delete", async () => {
     const { deps, context, remote, api } = setup();
@@ -194,7 +197,7 @@ describe("guided session goal", () => {
     resolve("build");
     await confirmation;
     expect(command).not.toHaveBeenCalled();
-    expect(deps.interactionManager.getSnapshot()).toBeNull();
+    expect(deps.interactionManager.getSnapshot(SCOPE)).toBeNull();
   });
 
   it("keeps confirmation answerable and reports an action error if agent resolution fails", async () => {
@@ -209,7 +212,7 @@ describe("guided session goal", () => {
       text: t("goal.action_error"),
       show_alert: true,
     });
-    expect(deps.interactionManager.getSnapshot()?.metadata.stage).toBe("confirm");
+    expect(deps.interactionManager.getSnapshot(SCOPE)?.metadata.stage).toBe("confirm");
   });
 
   it("asks for a separate objective, then starts only after confirmation", async () => {
@@ -217,9 +220,9 @@ describe("guided session goal", () => {
     const ctx = context();
     await goalCommand(ctx, deps);
     expect(ctx.reply).toHaveBeenCalledWith(t("goal.input.prompt"), expect.anything());
-    expect(deps.interactionManager.getSnapshot()?.metadata.stage).toBe("objective");
+    expect(deps.interactionManager.getSnapshot(SCOPE)?.metadata.stage).toBe("objective");
     await handleGoalTextInput(context("Fix all tests"), deps);
-    expect(deps.interactionManager.getSnapshot()?.metadata.action).toBe("start");
+    expect(deps.interactionManager.getSnapshot(SCOPE)?.metadata.action).toBe("start");
     expect(command).not.toHaveBeenCalled();
     await handleGoalCallback(context("", "goal:confirm"), deps);
     expect(command).toHaveBeenCalledExactlyOnceWith("s1", "repo", "Fix all tests", {
@@ -243,7 +246,7 @@ describe("guided session goal", () => {
       const { deps, context, command } = setup();
       await goalCommand(context(), deps);
       await handleGoalTextInput(context(text), deps);
-      expect(deps.interactionManager.getSnapshot()?.metadata.stage).toBe("objective");
+      expect(deps.interactionManager.getSnapshot(SCOPE)?.metadata.stage).toBe("objective");
       expect(command).not.toHaveBeenCalled();
     },
   );
@@ -269,7 +272,7 @@ describe("guided session goal", () => {
     const { deps, context, command } = setup();
     await goalCommand(context(), deps);
     await handleGoalCallback(context("", "goal:cancel"), deps);
-    expect(deps.interactionManager.getSnapshot()).toBeNull();
+    expect(deps.interactionManager.getSnapshot(SCOPE)).toBeNull();
     expect(command).not.toHaveBeenCalled();
   });
 
@@ -282,7 +285,7 @@ describe("guided session goal", () => {
       expect.stringContaining(initialGoal.objective),
       expect.anything(),
     );
-    expect(deps.interactionManager.getSnapshot()).toBeNull();
+    expect(deps.interactionManager.getSnapshot(SCOPE)).toBeNull();
     expect(command).not.toHaveBeenCalled();
   });
 
@@ -325,7 +328,7 @@ describe("guided session goal", () => {
     resolve({ kind: "none" });
     await confirm;
     expect(command).not.toHaveBeenCalled();
-    expect(deps.interactionManager.getSnapshot()).toBeNull();
+    expect(deps.interactionManager.getSnapshot(SCOPE)).toBeNull();
   });
 
   it("requires confirmation for Continue and refuses an old button after a state change", async () => {
@@ -375,7 +378,7 @@ describe("guided session goal", () => {
     remote.goal = initialGoal;
     await handleGoalTextInput(context("another goal"), deps);
     expect(command).not.toHaveBeenCalled();
-    expect(deps.interactionManager.getSnapshot()).toBeNull();
+    expect(deps.interactionManager.getSnapshot(SCOPE)).toBeNull();
   });
 
   it("preserves a known goal and its row after an explicit failed read", async () => {
@@ -428,7 +431,7 @@ describe("goal interaction routing", () => {
         kind: "custom",
         expectedInput,
         metadata: { flow: "goal", stage: "objective" },
-      });
+      }, SCOPE);
       expect(resolveInteractionGuardDecision(context(label), deps).allow).toBe(false);
     }
   });

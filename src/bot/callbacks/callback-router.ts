@@ -37,6 +37,7 @@ import {
 import { handleVariantSelect } from "./variant-selection-callback-handler.js";
 import { handleWorktreeCallback } from "./worktree-callback-handler.js";
 import { clearLsPathIndex, clearOpenPathIndex } from "../menus/file-browser-menu.js";
+import { getInteractionScope } from "../middleware/interaction-scope.js";
 
 type CallbackHandler = (ctx: Context) => Promise<boolean>;
 
@@ -297,7 +298,11 @@ export function registerCallbackRouter(bot: Bot<Context>, deps: CallbackRouterDe
       await ctx.answerCallbackQuery({ text: t("callback.unknown_command") });
     } catch (err) {
       logger.error("[Bot] Error handling callback:", err);
-      container.resetInteractionError(errorScope, "callback_handler_error");
+      container.resetInteractionError(
+        errorScope,
+        "callback_handler_error",
+        getInteractionScope(ctx),
+      );
       await ctx.answerCallbackQuery({ text: t("callback.processing_error") }).catch(() => {});
     }
   });

@@ -30,10 +30,13 @@ beforeEach(() => {
   container = createTestAppContainer();
 });
 
+/** The scope the test contexts resolve to: no chat named, so chat 0 and no thread. */
+const SCOPE = "0:no-thread";
+
 describe("bot/callbacks/prompt-attachment-callback-handler", () => {
   beforeEach(() => {
     promptAttachment.__resetForTests();
-    container.interactionManager.clear("test_reset");
+    container.interactionManager.clear("test_reset", SCOPE);
   });
 
   it("ignores callbacks that belong to other handlers", async () => {
@@ -49,13 +52,13 @@ describe("bot/callbacks/prompt-attachment-callback-handler", () => {
       kind: "custom",
       expectedInput: "mixed",
       metadata: { flow: "attachment" },
-    });
+    }, SCOPE);
 
     const ctx = createContext(ATTACHMENT_CANCEL_CALLBACK);
 
     expect(await handlePromptAttachmentCancel(ctx, createDeps())).toBe(true);
     expect(promptAttachment.get()).toBeNull();
-    expect(container.interactionManager.getSnapshot()).toBeNull();
+    expect(container.interactionManager.getSnapshot(SCOPE)).toBeNull();
   });
 
   it("drops the keyboard so the button cannot be pressed twice", async () => {

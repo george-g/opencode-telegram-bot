@@ -35,6 +35,7 @@ import { config } from "../../config.js";
 import { t } from "../../i18n/index.js";
 import { formatSessionTitle } from "../../app/formatters/session-title-formatter.js";
 import { alert, cancelMenu, failure } from "./feedback.js";
+import { getInteractionScope } from "../middleware/interaction-scope.js";
 import { attachToSession, type AttachSessionResult } from "../../app/services/attach-service.js";
 import { renderAssistantFinalPartsSafe } from "../messages/assistant-rendering.js";
 import {
@@ -89,32 +90,40 @@ export type BackgroundSessionOpenDeps = SessionSelectDeps &
 
 type SessionSearchDeps = Pick<AppContainer, "interactionManager">;
 
-function sessionSearchState(deps: SessionSearchDeps) {
-  const state = deps.interactionManager.getSnapshot();
+function sessionSearchState(deps: SessionSearchDeps, scope: string) {
+  const state = deps.interactionManager.getSnapshot(scope);
   return state?.kind === "custom" && state.metadata.flow === "session-search"
     ? state.metadata
     : null;
 }
 
-function sameSessionSearch(deps: SessionSearchDeps, state: Record<string, unknown>): boolean {
-  const current = sessionSearchState(deps);
+function sameSessionSearch(
+  deps: SessionSearchDeps,
+  scope: string,
+  state: Record<string, unknown>,
+): boolean {
+  const current = sessionSearchState(deps, scope);
   return !!current && current.token === state.token && current.stage === state.stage;
 }
 
-function startSessionSearch(deps: SessionSearchDeps): void {
-  deps.interactionManager.start({
-    kind: "custom",
-    expectedInput: "text",
-    allowedCommands: [],
-    metadata: { flow: "session-search", stage: "input", token: Symbol("session-search") },
-  });
+function startSessionSearch(deps: SessionSearchDeps, scope: string): void {
+  deps.interactionManager.start(
+    {
+      kind: "custom",
+      expectedInput: "text",
+      allowedCommands: [],
+      metadata: { flow: "session-search", stage: "input", token: Symbol("session-search") },
+    },
+    scope,
+  );
 }
 
 export async function handleSessionSearchTextInput(
   ctx: Context,
   deps: SessionSearchDeps,
 ): Promise<boolean> {
-  const state = sessionSearchState(deps);
+  const scope = getInteractionScope(ctx);
+  const state = sessionSearchState(deps, scope);
   if (!state || state.stage !== "input" || ctx.message?.text === undefined) return false;
   // A session title never comes near this length; the cap keeps the heading sendable.
   const query = ctx.message.text.slice(0, SESSION_SEARCH_QUERY_MAX_LENGTH);
@@ -123,24 +132,27 @@ export async function handleSessionSearchTextInput(
     const project = getCurrentProject();
     if (!project) throw new Error("Project no longer selected");
     const sessions = await searchSessions(project.worktree, query);
-    if (!sameSessionSearch(deps, state)) return true;
+    if (!sameSessionSearch(deps, scope, state)) return true;
     const view = buildSessionSearchView(sessions, query, 0, config.bot.sessionsListLimit);
     const sent = await ctx.reply(view.text, { reply_markup: view.keyboard });
-    if (!sameSessionSearch(deps, state)) return true;
-    deps.interactionManager.transition({
-      expectedInput: "callback",
-      metadata: {
-        ...state,
-        stage: "results",
-        query,
-        messageId: sent.message_id,
-        ids: sessions.map((session) => session.id),
+    if (!sameSessionSearch(deps, scope, state)) return true;
+    deps.interactionManager.transition(
+      {
+        expectedInput: "callback",
+        metadata: {
+          ...state,
+          stage: "results",
+          query,
+          messageId: sent.message_id,
+          ids: sessions.map((session) => session.id),
+        },
       },
-    });
+      scope,
+    );
   } catch (error) {
     logger.error("[Sessions] Error searching sessions:", error);
-    if (sameSessionSearch(deps, state)) {
-      deps.interactionManager.clear("session_search_error");
+    if (sameSessionSearch(deps, scope, state)) {
+      deps.interactionManager.clear("session_search_error", scope);
       await ctx.reply(t("sessions.fetch_error"));
     }
   }
@@ -157,19 +169,20 @@ export async function handleSessionSearchCallback(
     await replyBusyBlocked(ctx);
     return true;
   }
+  const scope = getInteractionScope(ctx);
   if (data === "session:search") {
     if (!(await ensureActiveInlineMenu(ctx, "session", deps))) return true;
-    const initial = deps.interactionManager.getSnapshot();
+    const initial = deps.interactionManager.getSnapshot(scope);
     await ctx.answerCallbackQuery().catch(() => {});
     await ctx.deleteMessage().catch(() => {});
-    const current = deps.interactionManager.getSnapshot();
+    const current = deps.interactionManager.getSnapshot(scope);
     if (current?.kind !== "inline" || current.metadata.messageId !== initial?.metadata.messageId)
       return true;
-    startSessionSearch(deps);
+    startSessionSearch(deps, scope);
     await ctx.reply(t("sessions.search.prompt"));
     return true;
   }
-  const state = sessionSearchState(deps);
+  const state = sessionSearchState(deps, scope);
   if (
     !state ||
     state.stage !== "results" ||
@@ -181,15 +194,15 @@ export async function handleSessionSearchCallback(
     return true;
   }
   if (data === "session:search:cancel") {
-    deps.interactionManager.clear("session_search_cancelled");
+    deps.interactionManager.clear("session_search_cancelled", scope);
     await cancelMenu(ctx);
     return true;
   }
   if (data === "session:search:again") {
     await ctx.answerCallbackQuery().catch(() => {});
     await ctx.deleteMessage().catch(() => {});
-    if (!sameSessionSearch(deps, state)) return true;
-    startSessionSearch(deps);
+    if (!sameSessionSearch(deps, scope, state)) return true;
+    startSessionSearch(deps, scope);
     await ctx.reply(t("sessions.search.prompt"));
     return true;
   }
@@ -200,7 +213,7 @@ export async function handleSessionSearchCallback(
       const project = getCurrentProject();
       if (!project) throw new Error("Project no longer selected");
       const sessions = await searchSessions(project.worktree, state.query);
-      if (!sameSessionSearch(deps, state)) {
+      if (!sameSessionSearch(deps, scope, state)) {
         await ctx.answerCallbackQuery().catch(() => {});
         return true;
       }
@@ -211,14 +224,17 @@ export async function handleSessionSearchCallback(
         config.bot.sessionsListLimit,
       );
       await ctx.editMessageText(view.text, { reply_markup: view.keyboard });
-      if (!sameSessionSearch(deps, state)) {
+      if (!sameSessionSearch(deps, scope, state)) {
         await ctx.answerCallbackQuery().catch(() => {});
         return true;
       }
-      deps.interactionManager.transition({
-        expectedInput: "callback",
-        metadata: { ...state, ids: sessions.map((session) => session.id) },
-      });
+      deps.interactionManager.transition(
+        {
+          expectedInput: "callback",
+          metadata: { ...state, ids: sessions.map((session) => session.id) },
+        },
+        scope,
+      );
       await ctx.answerCallbackQuery();
     } catch (error) {
       logger.error("[Sessions] Error loading search page:", error);
@@ -242,7 +258,7 @@ export async function handleSessionSearchCallback(
         searchState: state,
       });
     } catch (error) {
-      if (!sameSessionSearch(deps, state)) {
+      if (!sameSessionSearch(deps, scope, state)) {
         await ctx.answerCallbackQuery().catch(() => {});
         return true;
       }
@@ -522,7 +538,7 @@ export async function selectSessionById(
     directory: currentProject.worktree,
   });
 
-  if (options.searchState && !sameSessionSearch(deps, options.searchState)) {
+  if (options.searchState && !sameSessionSearch(deps, getInteractionScope(ctx), options.searchState)) {
     await ctx.answerCallbackQuery().catch(() => {});
     return;
   }
@@ -676,8 +692,8 @@ export async function selectSessionById(
   }
 }
 
-function shouldBlockBackgroundSessionOpen(deps: SessionSelectDeps): boolean {
-  const activeInteraction = deps.interactionManager.getSnapshot();
+function shouldBlockBackgroundSessionOpen(deps: SessionSelectDeps, scope: string): boolean {
+  const activeInteraction = deps.interactionManager.getSnapshot(scope);
   return activeInteraction !== null && activeInteraction.kind !== "inline";
 }
 
@@ -761,7 +777,7 @@ export async function handleBackgroundSessionOpen(
     return true;
   }
 
-  if (shouldBlockBackgroundSessionOpen(deps)) {
+  if (shouldBlockBackgroundSessionOpen(deps, getInteractionScope(ctx))) {
     await ctx
       .answerCallbackQuery({ text: t("interaction.blocked.finish_current") })
       .catch(() => {});

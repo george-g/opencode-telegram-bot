@@ -93,7 +93,7 @@ export async function handleVariantSelect(ctx: Context, deps: VariantSelectDeps)
     // Send confirmation message with updated keyboard
     const displayName = formatVariantForDisplay(variantId);
 
-    clearActiveInlineMenu("variant_selected", deps);
+    clearActiveInlineMenu("variant_selected", ctx, deps);
 
     // Send confirmation message with updated keyboard, then drop the inline menu
     await switched(ctx, t("variant.changed_message", { name: displayName }), keyboard);
@@ -101,7 +101,7 @@ export async function handleVariantSelect(ctx: Context, deps: VariantSelectDeps)
 
     return true;
   } catch (err) {
-    clearActiveInlineMenu("variant_select_error", deps);
+    clearActiveInlineMenu("variant_select_error", ctx, deps);
     logger.error("[VariantHandler] Error handling variant select:", err);
     await failure(ctx, "variant.change_error_callback");
     return true;

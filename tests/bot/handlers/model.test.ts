@@ -315,10 +315,13 @@ describe("bot model selection", () => {
       expect(ctx.reply).not.toHaveBeenCalled();
       expect(ctx.answerCallbackQuery).toHaveBeenCalledWith();
       expect(ctx.editMessageText).toHaveBeenCalledTimes(1);
-      expect(mocked.interactionManagerTransitionMock).toHaveBeenCalledWith({
-        expectedInput: "callback",
-        metadata: { menuKind: "model", messageId: 999, modelLists: freshLists },
-      });
+      expect(mocked.interactionManagerTransitionMock).toHaveBeenCalledWith(
+        {
+          expectedInput: "callback",
+          metadata: { menuKind: "model", messageId: 999, modelLists: freshLists },
+        },
+        "123:no-thread",
+      );
     });
 
     it("stays silent when the redraw after a stale tap fails", async () => {
@@ -561,6 +564,7 @@ describe("bot model selection", () => {
             models: [{ providerID: "fireworks", modelID: longModelID, variant: "default" }],
           }),
         }),
+        "123:no-thread",
       );
     });
   });
@@ -639,7 +643,10 @@ describe("bot model selection", () => {
       const result = await handleModelSearchResults(ctx, createDeps());
 
       expect(result).toBe(true);
-      expect(mocked.interactionManagerClearMock).toHaveBeenCalledWith("model_search_selected");
+      expect(mocked.interactionManagerClearMock).toHaveBeenCalledWith(
+        "model_search_selected",
+        "123:no-thread",
+      );
       expect(mocked.selectModelMock).toHaveBeenCalledWith({
         providerID: "fireworks",
         modelID: longModelID,
@@ -687,16 +694,19 @@ describe("bot model selection", () => {
         expect.stringContaining("glm"),
         expect.objectContaining({ reply_markup: expect.anything() }),
       );
-      expect(mocked.interactionManagerTransitionMock).toHaveBeenCalledWith({
-        expectedInput: "callback",
-        metadata: {
-          flow: "model-search",
-          stage: "results",
-          messageId: 999,
-          query: "glm",
-          models: [{ providerID: "zai", modelID: "glm-5", variant: "default" }],
+      expect(mocked.interactionManagerTransitionMock).toHaveBeenCalledWith(
+        {
+          expectedInput: "callback",
+          metadata: {
+            flow: "model-search",
+            stage: "results",
+            messageId: 999,
+            query: "glm",
+            models: [{ providerID: "zai", modelID: "glm-5", variant: "default" }],
+          },
         },
-      });
+        "123:no-thread",
+      );
     });
 
     it("rejects stale short list callbacks instead of parsing them as legacy models", async () => {
@@ -852,15 +862,18 @@ describe("bot model selection", () => {
         "Select provider from the list:",
         expect.objectContaining({ reply_markup: expect.anything() }),
       );
-      expect(mocked.interactionManagerTransitionMock).toHaveBeenCalledWith({
-        expectedInput: "callback",
-        metadata: {
-          menuKind: "model",
-          messageId: 999,
-          providers,
-          providersPage: 0,
+      expect(mocked.interactionManagerTransitionMock).toHaveBeenCalledWith(
+        {
+          expectedInput: "callback",
+          metadata: {
+            menuKind: "model",
+            messageId: 999,
+            providers,
+            providersPage: 0,
+          },
         },
-      });
+        "123:no-thread",
+      );
     });
 
     it("opens the models of the selected provider and stores the rendered page", async () => {
@@ -882,21 +895,24 @@ describe("bot model selection", () => {
         "OpenAI — select model:",
         expect.objectContaining({ reply_markup: expect.anything() }),
       );
-      expect(mocked.interactionManagerTransitionMock).toHaveBeenCalledWith({
-        expectedInput: "callback",
-        metadata: {
-          menuKind: "model",
-          messageId: 999,
-          providers,
-          providersPage: 1,
-          providerIndex: 0,
-          providerModelsPage: 0,
-          models: [
-            { providerID: "openai", modelID: "gpt-4o", variant: "default" },
-            { providerID: "openai", modelID: "gpt-5", variant: "default" },
-          ],
+      expect(mocked.interactionManagerTransitionMock).toHaveBeenCalledWith(
+        {
+          expectedInput: "callback",
+          metadata: {
+            menuKind: "model",
+            messageId: 999,
+            providers,
+            providersPage: 1,
+            providerIndex: 0,
+            providerModelsPage: 0,
+            models: [
+              { providerID: "openai", modelID: "gpt-4o", variant: "default" },
+              { providerID: "openai", modelID: "gpt-5", variant: "default" },
+            ],
+          },
         },
-      });
+        "123:no-thread",
+      );
     });
 
     it("returns to the model root menu", async () => {
@@ -914,10 +930,13 @@ describe("bot model selection", () => {
 
       expect(result).toBe(true);
       expect(ctx.editMessageText).toHaveBeenCalled();
-      expect(mocked.interactionManagerTransitionMock).toHaveBeenCalledWith({
-        expectedInput: "callback",
-        metadata: { menuKind: "model", messageId: 999, modelLists },
-      });
+      expect(mocked.interactionManagerTransitionMock).toHaveBeenCalledWith(
+        {
+          expectedInput: "callback",
+          metadata: { menuKind: "model", messageId: 999, modelLists },
+        },
+        "123:no-thread",
+      );
     });
 
     it("applies the model selected from a provider page", async () => {
@@ -975,13 +994,16 @@ describe("bot model selection", () => {
         "OpenAI — select model:",
         expect.objectContaining({ reply_markup: expect.anything() }),
       );
-      expect(mocked.interactionManagerTransitionMock).toHaveBeenCalledWith({
-        expectedInput: "callback",
-        metadata: expect.objectContaining({
-          providerIndex: 0,
-          models: [{ providerID: "openai", modelID: "gpt-4o", variant: "default" }],
-        }),
-      });
+      expect(mocked.interactionManagerTransitionMock).toHaveBeenCalledWith(
+        {
+          expectedInput: "callback",
+          metadata: expect.objectContaining({
+            providerIndex: 0,
+            models: [{ providerID: "openai", modelID: "gpt-4o", variant: "default" }],
+          }),
+        },
+        "123:no-thread",
+      );
     });
 
     it("rejects a callback whose model cannot be resolved from the menu snapshot", async () => {

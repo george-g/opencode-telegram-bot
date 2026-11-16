@@ -23,6 +23,9 @@ function callback(data: string, messageId = 7): Context {
   } as unknown as Context;
 }
 
+/** The scope the test contexts resolve to: chat 100 with no forum topic. */
+const SCOPE = "100:no-thread";
+
 describe("context compaction flow", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -34,7 +37,7 @@ describe("context compaction flow", () => {
 
   it("edits details into confirmation and compacts only after confirming", async () => {
     const deps = createTestAppContainer();
-    deps.interactionManager.start({ kind: "inline", expectedInput: "callback", metadata: { menuKind: "context", messageId: 7, stage: "details" } });
+    deps.interactionManager.start({ kind: "inline", expectedInput: "callback", metadata: { menuKind: "context", messageId: 7, stage: "details" } }, SCOPE);
     const early = callback("compact:confirm");
     await handleCompactConfirm(early, deps);
     expect(mocked.summarize).not.toHaveBeenCalled();
@@ -47,13 +50,13 @@ describe("context compaction flow", () => {
     expect(options?.reply_markup?.inline_keyboard.flat().map((button) => button.text)).toEqual([
       t("context.button.confirm"), t("inline.button.cancel"),
     ]);
-    expect(deps.interactionManager.getSnapshot()?.metadata.stage).toBe("confirm");
+    expect(deps.interactionManager.getSnapshot(SCOPE)?.metadata.stage).toBe("confirm");
     expect(mocked.summarize).not.toHaveBeenCalled();
 
     const confirm = callback("compact:confirm");
     await handleCompactConfirm(confirm, deps);
     expect(mocked.summarize).toHaveBeenCalledOnce();
-    expect(deps.interactionManager.getSnapshot()).toBeNull();
+    expect(deps.interactionManager.getSnapshot(SCOPE)).toBeNull();
     expect(confirm.deleteMessage).toHaveBeenCalledOnce();
     expect(confirm.reply).toHaveBeenCalledWith(t("context.progress"));
     expect(confirm.api.editMessageText).toHaveBeenCalledWith(100, 8, t("context.success"));
@@ -62,18 +65,18 @@ describe("context compaction flow", () => {
   it("closes details or cancels confirmation without compacting", async () => {
     for (const stage of ["details", "confirm"]) {
       const deps = createTestAppContainer();
-      deps.interactionManager.start({ kind: "inline", expectedInput: "callback", metadata: { menuKind: "context", messageId: 7, stage } });
+      deps.interactionManager.start({ kind: "inline", expectedInput: "callback", metadata: { menuKind: "context", messageId: 7, stage } }, SCOPE);
       const ctx = callback("inline:cancel:context");
       expect(await handleInlineMenuCancel(ctx, deps)).toBe(true);
       expect(ctx.deleteMessage).toHaveBeenCalledOnce();
-      expect(deps.interactionManager.getSnapshot()).toBeNull();
+      expect(deps.interactionManager.getSnapshot(SCOPE)).toBeNull();
     }
     expect(mocked.summarize).not.toHaveBeenCalled();
   });
 
   it("rejects callbacks from a different message and repeated details action", async () => {
     const deps = createTestAppContainer();
-    deps.interactionManager.start({ kind: "inline", expectedInput: "callback", metadata: { menuKind: "context", messageId: 7, stage: "details" } });
+    deps.interactionManager.start({ kind: "inline", expectedInput: "callback", metadata: { menuKind: "context", messageId: 7, stage: "details" } }, SCOPE);
     const stale = callback("compact:details", 8);
     await handleCompactDetails(stale, deps);
     expect(stale.editMessageText).not.toHaveBeenCalled();
@@ -89,7 +92,7 @@ describe("context compaction flow", () => {
     for (const [fetched, shown] of [["Generated title", "Generated title"], ["", t("pinned.default_session_title")]]) {
       mocked.title.mockResolvedValue(fetched);
       const deps = createTestAppContainer();
-      deps.interactionManager.start({ kind: "inline", expectedInput: "callback", metadata: { menuKind: "context", messageId: 7, stage: "details" } });
+      deps.interactionManager.start({ kind: "inline", expectedInput: "callback", metadata: { menuKind: "context", messageId: 7, stage: "details" } }, SCOPE);
       const ctx = callback("compact:details");
       await handleCompactDetails(ctx, deps);
       expect(ctx.editMessageText).toHaveBeenCalledWith(t("context.confirm_text", { title: shown }), expect.anything());
@@ -99,7 +102,7 @@ describe("context compaction flow", () => {
 
   it("answers the callback before waiting for Telegram to edit the confirmation", async () => {
     const deps = createTestAppContainer();
-    deps.interactionManager.start({ kind: "inline", expectedInput: "callback", metadata: { menuKind: "context", messageId: 7, stage: "details" } });
+    deps.interactionManager.start({ kind: "inline", expectedInput: "callback", metadata: { menuKind: "context", messageId: 7, stage: "details" } }, SCOPE);
     const ctx = callback("compact:details");
     let finishEdit!: (value: true) => void;
     vi.mocked(ctx.editMessageText).mockReturnValue(new Promise<true>((resolve) => { finishEdit = resolve; }));
@@ -107,9 +110,9 @@ describe("context compaction flow", () => {
     const pending = handleCompactDetails(ctx, deps);
     await vi.waitFor(() => expect(ctx.editMessageText).toHaveBeenCalledOnce());
     expect(ctx.answerCallbackQuery).toHaveBeenCalledOnce();
-    expect(deps.interactionManager.getSnapshot()?.metadata.stage).toBe("details");
+    expect(deps.interactionManager.getSnapshot(SCOPE)?.metadata.stage).toBe("details");
     finishEdit(true);
     await pending;
-    expect(deps.interactionManager.getSnapshot()?.metadata.stage).toBe("confirm");
+    expect(deps.interactionManager.getSnapshot(SCOPE)?.metadata.stage).toBe("confirm");
   });
 });

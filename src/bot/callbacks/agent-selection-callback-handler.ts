@@ -79,13 +79,13 @@ export async function handleAgentSelect(ctx: Context, deps: AgentSelectDeps): Pr
     );
     const displayName = getAgentDisplayName(agentName);
 
-    clearActiveInlineMenu("agent_selected", deps);
+    clearActiveInlineMenu("agent_selected", ctx, deps);
 
     await switched(ctx, t("agent.changed_message", { name: displayName }), keyboard);
 
     return true;
   } catch (err) {
-    clearActiveInlineMenu("agent_select_error", deps);
+    clearActiveInlineMenu("agent_select_error", ctx, deps);
     logger.error("[AgentHandler] Error handling agent select:", err);
     await failure(ctx, "agent.change_error_callback");
     return true;

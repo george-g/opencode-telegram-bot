@@ -10,6 +10,8 @@ import type { InteractionState } from "../../app/types/interaction.js";
 import { logger } from "../../utils/logger.js";
 import { t } from "../../i18n/index.js";
 import { cancelMenu } from "./feedback.js";
+import { getInteractionScope } from "../middleware/interaction-scope.js";
+import { DEFAULT_INTERACTION_SCOPE } from "../../app/types/interaction-scope.js";
 import { processUserPrompt, type ProcessPromptDeps } from "../handlers/prompt.js";
 import { createIncomingPrompt } from "../../app/types/prompt.js";
 import {
@@ -148,10 +150,11 @@ export type SkillsCallbackDeps = ProcessPromptDeps & Pick<AppContainer, "interac
 export function clearSkillsInteraction(
   deps: Pick<AppContainer, "interactionManager">,
   reason: string,
+  scope: string = DEFAULT_INTERACTION_SCOPE,
 ): void {
-  const metadata = parseSkillsMetadata(deps.interactionManager.getSnapshot());
+  const metadata = parseSkillsMetadata(deps.interactionManager.getSnapshot(scope));
   if (metadata) {
-    deps.interactionManager.clear(reason);
+    deps.interactionManager.clear(reason, scope);
   }
 }
 
@@ -196,7 +199,8 @@ export async function handleSkillsCallback(
     return handleSkillsSearchCallback(ctx, deps);
   }
 
-  const metadata = parseSkillsMetadata(deps.interactionManager.getSnapshot());
+  const scope = getInteractionScope(ctx);
+  const metadata = parseSkillsMetadata(deps.interactionManager.getSnapshot(scope));
   const callbackMessageId = getCallbackMessageId(ctx);
 
   if (!metadata || callbackMessageId === null || metadata.messageId !== callbackMessageId) {
@@ -206,7 +210,7 @@ export async function handleSkillsCallback(
 
   try {
     if (data === SKILLS_CALLBACK_CANCEL) {
-      clearSkillsInteraction(deps, "skills_cancelled");
+      clearSkillsInteraction(deps, "skills_cancelled", scope);
       await cancelMenu(ctx);
       return true;
     }
@@ -217,7 +221,7 @@ export async function handleSkillsCallback(
         return true;
       }
 
-      clearSkillsInteraction(deps, "skills_execute_clicked");
+      clearSkillsInteraction(deps, "skills_execute_clicked", scope);
       await ctx.answerCallbackQuery({ text: t("skills.execute_callback") });
       await ctx.deleteMessage().catch(() => {});
 
@@ -254,17 +258,20 @@ export async function handleSkillsCallback(
         reply_markup: keyboard,
       });
 
-      deps.interactionManager.transition({
-        expectedInput: "callback",
-        metadata: {
-          flow: "skills",
-          stage: "list",
-          messageId: metadata.messageId,
-          projectDirectory: metadata.projectDirectory,
-          skills: metadata.skills,
-          page: normalizedPage,
+      deps.interactionManager.transition(
+        {
+          expectedInput: "callback",
+          metadata: {
+            flow: "skills",
+            stage: "list",
+            messageId: metadata.messageId,
+            projectDirectory: metadata.projectDirectory,
+            skills: metadata.skills,
+            page: normalizedPage,
+          },
         },
-      });
+        scope,
+      );
 
       return true;
     }
@@ -286,21 +293,24 @@ export async function handleSkillsCallback(
       reply_markup: buildSkillsConfirmKeyboard(),
     });
 
-    deps.interactionManager.transition({
-      expectedInput: "mixed",
-      metadata: {
-        flow: "skills",
-        stage: "confirm",
-        messageId: metadata.messageId,
-        projectDirectory: metadata.projectDirectory,
-        skillName: selectedSkill.name,
+    deps.interactionManager.transition(
+      {
+        expectedInput: "mixed",
+        metadata: {
+          flow: "skills",
+          stage: "confirm",
+          messageId: metadata.messageId,
+          projectDirectory: metadata.projectDirectory,
+          skillName: selectedSkill.name,
+        },
       },
-    });
+      scope,
+    );
 
     return true;
   } catch (error) {
     logger.error("[Skills] Error handling skill callback:", error);
-    clearSkillsInteraction(deps, "skills_callback_error");
+    clearSkillsInteraction(deps, "skills_callback_error", scope);
     await ctx.answerCallbackQuery({ text: t("callback.processing_error") }).catch(() => {});
     return true;
   }
@@ -311,32 +321,46 @@ type SkillsSearchDeps = Pick<
   "interactionManager" | "foregroundSessionState" | "attachManager"
 >;
 
-function skillsSearchState(deps: SkillsSearchDeps): Record<string, unknown> | null {
-  const state = deps.interactionManager.getSnapshot();
+function skillsSearchState(
+  deps: SkillsSearchDeps,
+  scope: string = DEFAULT_INTERACTION_SCOPE,
+): Record<string, unknown> | null {
+  const state = deps.interactionManager.getSnapshot(scope);
   return state?.kind === "custom" && state.metadata.flow === "skills-search"
     ? state.metadata
     : null;
 }
 
-function sameSkillsSearch(deps: SkillsSearchDeps, state: Record<string, unknown>): boolean {
-  const current = skillsSearchState(deps);
+function sameSkillsSearch(
+  deps: SkillsSearchDeps,
+  state: Record<string, unknown>,
+  scope: string = DEFAULT_INTERACTION_SCOPE,
+): boolean {
+  const current = skillsSearchState(deps, scope);
   return !!current && current.token === state.token && current.stage === state.stage;
 }
 
-function startSkillsSearch(deps: SkillsSearchDeps): void {
-  deps.interactionManager.start({
-    kind: "custom",
-    expectedInput: "text",
-    allowedCommands: [],
-    metadata: { flow: "skills-search", stage: "input", token: Symbol("skills-search") },
-  });
+function startSkillsSearch(
+  deps: SkillsSearchDeps,
+  scope: string = DEFAULT_INTERACTION_SCOPE,
+): void {
+  deps.interactionManager.start(
+    {
+      kind: "custom",
+      expectedInput: "text",
+      allowedCommands: [],
+      metadata: { flow: "skills-search", stage: "input", token: Symbol("skills-search") },
+    },
+    scope,
+  );
 }
 
 export async function handleSkillsSearchTextInput(
   ctx: Context,
   deps: SkillsSearchDeps,
 ): Promise<boolean> {
-  const state = skillsSearchState(deps);
+  const scope = getInteractionScope(ctx);
+  const state = skillsSearchState(deps, scope);
   if (!state || state.stage !== "input" || ctx.message?.text === undefined) return false;
   const query = ctx.message.text.slice(0, SKILLS_SEARCH_QUERY_MAX_LENGTH);
   if (!query.trim()) return true;
@@ -344,29 +368,32 @@ export async function handleSkillsSearchTextInput(
     const project = getCurrentProject();
     if (!project) throw new Error("Project no longer selected");
     const skills = filterSkillsForSearch(await loadSkillsCatalog(project.worktree), query);
-    if (!sameSkillsSearch(deps, state)) return true;
+    if (!sameSkillsSearch(deps, state, scope)) return true;
     if (isForegroundBusy(deps)) {
       await replyBusyBlocked(ctx);
       return true;
     }
     const view = buildSkillsSearchView(skills, query, 0, config.bot.commandsListLimit);
     const sent = await ctx.reply(view.text, { reply_markup: view.keyboard });
-    if (!sameSkillsSearch(deps, state)) return true;
-    deps.interactionManager.transition({
-      expectedInput: "callback",
-      metadata: {
-        ...state,
-        stage: "results",
-        query,
-        skills,
-        projectDirectory: project.worktree,
-        messageId: sent.message_id,
+    if (!sameSkillsSearch(deps, state, scope)) return true;
+    deps.interactionManager.transition(
+      {
+        expectedInput: "callback",
+        metadata: {
+          ...state,
+          stage: "results",
+          query,
+          skills,
+          projectDirectory: project.worktree,
+          messageId: sent.message_id,
+        },
       },
-    });
+      scope,
+    );
   } catch (error) {
     logger.error("[Skills] Error searching skills:", error);
-    if (sameSkillsSearch(deps, state)) {
-      deps.interactionManager.clear("skills_search_error");
+    if (sameSkillsSearch(deps, state, scope)) {
+      deps.interactionManager.clear("skills_search_error", scope);
       await ctx.reply(t("skills.fetch_error"));
     }
   }
@@ -378,45 +405,46 @@ async function handleSkillsSearchCallback(
   deps: SkillsCallbackDeps,
 ): Promise<boolean> {
   const data = ctx.callbackQuery?.data;
+  const scope = getInteractionScope(ctx);
   if (isForegroundBusy(deps)) {
     await replyBusyBlocked(ctx);
     return true;
   }
   if (data === SKILLS_CALLBACK_SEARCH) {
-    const metadata = parseSkillsMetadata(deps.interactionManager.getSnapshot());
+    const metadata = parseSkillsMetadata(deps.interactionManager.getSnapshot(scope));
     if (metadata?.stage !== "list" || metadata.messageId !== getCallbackMessageId(ctx)) {
       await ctx.answerCallbackQuery({ text: t("inline.inactive_callback"), show_alert: true });
       return true;
     }
-    const initial = deps.interactionManager.getSnapshot();
+    const initial = deps.interactionManager.getSnapshot(scope);
     await ctx.answerCallbackQuery().catch(() => {});
     await ctx.deleteMessage().catch(() => {});
-    const current = deps.interactionManager.getSnapshot();
+    const current = deps.interactionManager.getSnapshot(scope);
     if (
       current?.metadata.flow !== "skills" ||
       current.metadata.stage !== "list" ||
       current.metadata.messageId !== initial?.metadata.messageId
     )
       return true;
-    startSkillsSearch(deps);
+    startSkillsSearch(deps, scope);
     await ctx.reply(t("skills.search.prompt"));
     return true;
   }
-  const state = skillsSearchState(deps);
+  const state = skillsSearchState(deps, scope);
   if (!state || state.stage !== "results" || state.messageId !== getCallbackMessageId(ctx)) {
     await ctx.answerCallbackQuery({ text: t("inline.inactive_callback"), show_alert: true });
     return true;
   }
   if (data === `${SKILLS_CALLBACK_SEARCH}:cancel`) {
-    deps.interactionManager.clear("skills_search_cancelled");
+    deps.interactionManager.clear("skills_search_cancelled", scope);
     await cancelMenu(ctx);
     return true;
   }
   if (data === `${SKILLS_CALLBACK_SEARCH}:again`) {
     await ctx.answerCallbackQuery().catch(() => {});
     await ctx.deleteMessage().catch(() => {});
-    if (!sameSkillsSearch(deps, state)) return true;
-    startSkillsSearch(deps);
+    if (!sameSkillsSearch(deps, state, scope)) return true;
+    startSkillsSearch(deps, scope);
     await ctx.reply(t("skills.search.prompt"));
     return true;
   }
@@ -430,7 +458,7 @@ async function handleSkillsSearchCallback(
         await loadSkillsCatalog(project.worktree),
         state.query,
       );
-      if (!sameSkillsSearch(deps, state)) {
+      if (!sameSkillsSearch(deps, state, scope)) {
         await ctx.answerCallbackQuery().catch(() => {});
         return true;
       }
@@ -445,14 +473,17 @@ async function handleSkillsSearchCallback(
         config.bot.commandsListLimit,
       );
       await ctx.editMessageText(view.text, { reply_markup: view.keyboard });
-      if (!sameSkillsSearch(deps, state)) {
+      if (!sameSkillsSearch(deps, state, scope)) {
         await ctx.answerCallbackQuery().catch(() => {});
         return true;
       }
-      deps.interactionManager.transition({
-        expectedInput: "callback",
-        metadata: { ...state, skills, projectDirectory: project.worktree },
-      });
+      deps.interactionManager.transition(
+        {
+          expectedInput: "callback",
+          metadata: { ...state, skills, projectDirectory: project.worktree },
+        },
+        scope,
+      );
       await ctx.answerCallbackQuery();
     } catch (error) {
       logger.error("[Skills] Error loading search page:", error);
@@ -470,26 +501,29 @@ async function handleSkillsSearchCallback(
     }
     try {
       await ctx.answerCallbackQuery();
-      if (!sameSkillsSearch(deps, state)) return true;
+      if (!sameSkillsSearch(deps, state, scope)) return true;
       await ctx.editMessageText(t("skills.confirm", { skill: `/${selectedSkill.name}` }), {
         reply_markup: buildSkillsConfirmKeyboard(),
       });
-      if (!sameSkillsSearch(deps, state)) return true;
-      deps.interactionManager.transition({
-        expectedInput: "mixed",
-        allowedCommands: [...DEFAULT_ALLOWED_INTERACTION_COMMANDS],
-        metadata: {
-          flow: "skills",
-          stage: "confirm",
-          messageId: state.messageId,
-          projectDirectory: state.projectDirectory,
-          skillName: selectedSkill.name,
+      if (!sameSkillsSearch(deps, state, scope)) return true;
+      deps.interactionManager.transition(
+        {
+          expectedInput: "mixed",
+          allowedCommands: [...DEFAULT_ALLOWED_INTERACTION_COMMANDS],
+          metadata: {
+            flow: "skills",
+            stage: "confirm",
+            messageId: state.messageId,
+            projectDirectory: state.projectDirectory,
+            skillName: selectedSkill.name,
+          },
         },
-      });
+        scope,
+      );
     } catch (error) {
       logger.error("[Skills] Error selecting search result:", error);
-      if (sameSkillsSearch(deps, state)) {
-        deps.interactionManager.clear("skills_search_select_error");
+      if (sameSkillsSearch(deps, state, scope)) {
+        deps.interactionManager.clear("skills_search_select_error", scope);
         await ctx.answerCallbackQuery({ text: t("callback.processing_error") }).catch(() => {});
       } else {
         await ctx.answerCallbackQuery().catch(() => {});

@@ -66,7 +66,7 @@ function setup(read: () => Promise<unknown>, action: "start" | "resume" = "resum
       objective: "old",
       controlToken: goalManager.getControlToken(),
     },
-  });
+  }, SCOPE);
   const command = vi.fn().mockResolvedValue({ kind: "ok" });
   const deps = {
     interactionManager,
@@ -88,6 +88,9 @@ function setup(read: () => Promise<unknown>, action: "start" | "resume" = "resum
     }) as unknown as Context;
   return { deps, command, context };
 }
+
+/** The scope the confirmation contexts resolve to: chat 1 with no forum topic. */
+const SCOPE = "1:no-thread";
 
 describe("goal confirmation", () => {
   it.each(["start", "resume"] as const)(

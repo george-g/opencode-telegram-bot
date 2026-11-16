@@ -282,7 +282,7 @@ describe("bot/handlers/prompt", () => {
       await processUserPrompt(createContext(), "Explain this file", createDeps());
 
       expect(promptAttachment.get()).toBeNull();
-      expect(mocked.interactionClearMock).toHaveBeenCalledWith("attachment_consumed");
+      expect(mocked.interactionClearMock).toHaveBeenCalledWith("attachment_consumed", "777:no-thread");
       expect(mocked.editMessageReplyMarkupMock).toHaveBeenCalledWith(777, 555);
       expect(mocked.resolvePendingAttachmentMock).not.toHaveBeenCalled();
     });
@@ -786,7 +786,7 @@ describe("bot/handlers/prompt", () => {
       await processUserPrompt(createContext(), "Explain this file", createDeps());
 
       expect(promptAttachment.get()).toBeNull();
-      expect(mocked.interactionClearMock).toHaveBeenCalledWith("attachment_consumed");
+      expect(mocked.interactionClearMock).toHaveBeenCalledWith("attachment_consumed", "777:no-thread");
     });
 
     it("removes the cancel button from the confirmation once the file was sent", async () => {

@@ -12,6 +12,7 @@ import {
 import { t } from "../../i18n/index.js";
 import { logger } from "../../utils/logger.js";
 import { safeBackgroundTask } from "../../utils/safe-background-task.js";
+import { getInteractionScope } from "../middleware/interaction-scope.js";
 
 function getCallbackMessageId(ctx: Context): number | null {
   const message = ctx.callbackQuery?.message;
@@ -71,19 +72,21 @@ export async function handlePermissionCallback(
 
   logger.debug(`[PermissionHandler] Received callback: ${data}`);
 
-  if (!deps.permissionManager.isActive()) {
-    clearPermissionInteraction("permission_inactive_callback", deps);
+  const scope = getInteractionScope(ctx);
+
+  if (!deps.permissionManager.isActive(scope)) {
+    clearPermissionInteraction("permission_inactive_callback", deps, scope);
     await ctx.answerCallbackQuery({ text: t("permission.inactive_callback"), show_alert: true });
     return true;
   }
 
   const callbackMessageId = getCallbackMessageId(ctx);
-  if (!deps.permissionManager.isActiveMessage(callbackMessageId)) {
+  if (!deps.permissionManager.isActiveMessage(callbackMessageId, scope)) {
     await ctx.answerCallbackQuery({ text: t("permission.inactive_callback"), show_alert: true });
     return true;
   }
 
-  const requestIDs = deps.permissionManager.getRequestIDs(callbackMessageId);
+  const requestIDs = deps.permissionManager.getRequestIDs(callbackMessageId, scope);
   if (requestIDs.length === 0) {
     await ctx.answerCallbackQuery({ text: t("permission.inactive_callback"), show_alert: true });
     return true;
@@ -101,7 +104,7 @@ export async function handlePermissionCallback(
   }
 
   try {
-    await handlePermissionReply(ctx, deps, action, requestIDs, callbackMessageId);
+    await handlePermissionReply(ctx, deps, scope, action, requestIDs, callbackMessageId);
   } catch (err) {
     logger.error("[PermissionHandler] Error handling callback:", err);
     await ctx.answerCallbackQuery({
@@ -116,6 +119,7 @@ export async function handlePermissionCallback(
 async function handlePermissionReply(
   ctx: Context,
   deps: PermissionCallbackDeps,
+  scope: string,
   reply: PermissionReply,
   requestIDs: string[],
   callbackMessageId: number | null,
@@ -126,8 +130,8 @@ async function handlePermissionReply(
   const directory = currentSession?.directory ?? currentProject?.worktree;
 
   if (!directory || !chatId) {
-    deps.permissionManager.clear();
-    clearPermissionInteraction("permission_invalid_runtime_context", deps);
+    deps.permissionManager.clear(scope);
+    clearPermissionInteraction("permission_invalid_runtime_context", deps, scope);
 
     await ctx.answerCallbackQuery({
       text: t("permission.no_active_request_callback"),
@@ -146,7 +150,7 @@ async function handlePermissionReply(
   const settlesSession = reply === "reject" && opencodeServerVersion === "v2";
   if (
     callbackMessageId === null ||
-    !deps.permissionManager.markSending(callbackMessageId, reply, settlesSession)
+    !deps.permissionManager.markSending(callbackMessageId, reply, settlesSession, scope)
   ) {
     // The first answer is still on its way: a second tap changes nothing.
     await ctx.answerCallbackQuery();
@@ -165,7 +169,7 @@ async function handlePermissionReply(
   );
 
   const messageId = callbackMessageId;
-  const sessionID = deps.permissionManager.getRequest(messageId)?.sessionID ?? null;
+  const sessionID = deps.permissionManager.getRequest(messageId, scope)?.sessionID ?? null;
 
   safeBackgroundTask({
     taskName: "permission.reply",
@@ -198,7 +202,7 @@ async function handlePermissionReply(
       return results;
     },
     onSuccess: (results) => {
-      void finishPermissionReply(ctx.api, chatId, deps, {
+      void finishPermissionReply(ctx.api, chatId, deps, scope, {
         messageId,
         sessionID,
         reply,
@@ -207,7 +211,7 @@ async function handlePermissionReply(
       });
     },
     onError: () => {
-      void finishPermissionReply(ctx.api, chatId, deps, {
+      void finishPermissionReply(ctx.api, chatId, deps, scope, {
         messageId,
         sessionID,
         reply,
@@ -241,17 +245,18 @@ async function finishPermissionReply(
   api: Context["api"],
   chatId: number,
   deps: PermissionCallbackDeps,
+  scope: string,
   finished: FinishedPermissionReply,
 ): Promise<void> {
   const { messageId, sessionID, reply, settlesSession, results } = finished;
 
   try {
     if (results.failed.length > 0) {
-      const change = deps.permissionManager.failSending(messageId, results.accepted);
+      const change = deps.permissionManager.failSending(messageId, results.accepted, scope);
       if (change && change.outcome) {
-        await applyPermissionPromptChanges(api, chatId, [change], deps);
+        await applyPermissionPromptChanges(api, chatId, [change], deps, scope);
       } else if (change) {
-        await showPermissionDeliveryWarning(api, chatId, change, deps);
+        await showPermissionDeliveryWarning(api, chatId, change, deps, scope);
       }
       return;
     }
@@ -260,20 +265,25 @@ async function finishPermissionReply(
     const change = deps.permissionManager.endPrompt(
       messageId,
       answered ? { kind: "replied", reply, outside: false } : { kind: "settled_outside" },
+      scope,
     );
     const changes = change ? [change] : [];
 
     if (answered && settlesSession && sessionID) {
       changes.push(
-        ...deps.permissionManager.endSessionPrompts(sessionID, {
-          kind: "replied",
-          reply: "reject",
-          outside: false,
-        }),
+        ...deps.permissionManager.endSessionPrompts(
+          sessionID,
+          {
+            kind: "replied",
+            reply: "reject",
+            outside: false,
+          },
+          scope,
+        ),
       );
     }
 
-    await applyPermissionPromptChanges(api, chatId, changes, deps);
+    await applyPermissionPromptChanges(api, chatId, changes, deps, scope);
     logger.info(`[PermissionHandler] Permission reply finished: messageId=${messageId}`);
   } catch (err) {
     logger.error("[PermissionHandler] Failed to finish permission reply:", err);

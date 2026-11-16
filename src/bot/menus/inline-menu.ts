@@ -3,6 +3,7 @@ import type { AppContainer } from "../../app/bootstrap/app-container.js";
 import type { InteractionMetadata, InteractionState } from "../../app/types/interaction.js";
 import { logger } from "../../utils/logger.js";
 import { t } from "../../i18n/index.js";
+import { getInteractionScope } from "../middleware/interaction-scope.js";
 
 export const INLINE_MENU_CANCEL_PREFIX = "inline:cancel:";
 export const LEGACY_CONTEXT_CANCEL_CALLBACK = "compact:cancel";
@@ -125,15 +126,18 @@ export async function replyWithInlineMenu(
 
   const message = await ctx.reply(options.text, replyOptions);
 
-  deps.interactionManager.start({
-    kind: "inline",
-    expectedInput: "callback",
-    metadata: {
-      ...options.metadata,
-      menuKind: options.menuKind,
-      messageId: message.message_id,
+  deps.interactionManager.start(
+    {
+      kind: "inline",
+      expectedInput: "callback",
+      metadata: {
+        ...options.metadata,
+        menuKind: options.menuKind,
+        messageId: message.message_id,
+      },
     },
-  });
+    getInteractionScope(ctx),
+  );
 
   logger.debug(
     `[InlineMenu] Opened menu: kind=${options.menuKind}, messageId=${message.message_id}`,
@@ -147,7 +151,9 @@ export async function ensureActiveInlineMenu(
   menuKind: InlineMenuKind,
   deps: InlineMenuDeps,
 ): Promise<boolean> {
-  const activeMetadata = getActiveInlineMenuMetadata(deps.interactionManager.getSnapshot());
+  const activeMetadata = getActiveInlineMenuMetadata(
+    deps.interactionManager.getSnapshot(getInteractionScope(ctx)),
+  );
   const callbackMessageId = getCallbackMessageId(ctx);
 
   const isActive =
@@ -171,9 +177,10 @@ export async function ensureActiveInlineMenu(
   return false;
 }
 
-export function clearActiveInlineMenu(reason: string, deps: InlineMenuDeps): void {
-  const state = deps.interactionManager.getSnapshot();
+export function clearActiveInlineMenu(reason: string, ctx: Context, deps: InlineMenuDeps): void {
+  const scope = getInteractionScope(ctx);
+  const state = deps.interactionManager.getSnapshot(scope);
   if (state?.kind === "inline") {
-    deps.interactionManager.clear(reason);
+    deps.interactionManager.clear(reason, scope);
   }
 }

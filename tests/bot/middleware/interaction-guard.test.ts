@@ -18,6 +18,16 @@ import type { AppContainer } from "../../../src/app/bootstrap/app-container.js";
 
 let deps: AppContainer;
 
+/** The scope the test contexts resolve to: chat 1 without a forum topic. */
+const SCOPE = "1:no-thread";
+
+/** Opens the guard's scope by hand: the contexts below all carry chat 1. */
+function startGuardInteraction(
+  options: Parameters<typeof startInteractionForTest>[1],
+): ReturnType<typeof startInteractionForTest> {
+  return startInteractionForTest(deps.interactionManager, options, SCOPE);
+}
+
 const mocked = vi.hoisted(() => ({
   reconcileForegroundBusyStateMock: vi.fn(),
   getPromptQueueMode: vi.fn(),
@@ -50,6 +60,7 @@ function createTextContext(text: string): Context {
 
 function createCallbackContext(data: string): Context {
   return {
+    chat: { id: 1 },
     callbackQuery: { data } as Context["callbackQuery"],
     reply: vi.fn().mockResolvedValue(undefined),
     answerCallbackQuery: vi.fn().mockResolvedValue(undefined),
@@ -92,7 +103,7 @@ describe("interactionGuardMiddleware", () => {
 
   describe.each(["commands", "skills"])("%s search", (catalog) => {
     function startSearch(stage: "input" | "results") {
-      deps.interactionManager.start({
+      startGuardInteraction({
         kind: "custom",
         expectedInput: stage === "input" ? "text" : "callback",
         allowedCommands: [],
@@ -104,13 +115,13 @@ describe("interactionGuardMiddleware", () => {
       "blocks %s as a command rather than treating it as an idle query",
       async (command) => {
         startSearch("input");
-        const before = deps.interactionManager.getSnapshot();
+        const before = deps.interactionManager.getSnapshot(SCOPE);
         const ctx = createTextContext(command);
         const next = vi.fn();
         await interactionGuardMiddleware(ctx, next, deps);
         expect(next).not.toHaveBeenCalled();
         expect(ctx.reply).toHaveBeenCalled();
-        expect(deps.interactionManager.getSnapshot()).toEqual(before);
+        expect(deps.interactionManager.getSnapshot(SCOPE)).toEqual(before);
       },
     );
 
@@ -133,7 +144,7 @@ describe("interactionGuardMiddleware", () => {
     ])("blocks %s during a run and keeps the search waiting", async (input) => {
       startSearch(input === "query" ? "input" : "results");
       deps.foregroundSessionState.markBusy("session-1", "repo");
-      const before = deps.interactionManager.getSnapshot();
+      const before = deps.interactionManager.getSnapshot(SCOPE);
       const ctx = input === "query" ? createTextContext("command") : createCallbackContext(input);
       const next = vi.fn();
       await interactionGuardMiddleware(ctx, next, deps);
@@ -143,7 +154,7 @@ describe("interactionGuardMiddleware", () => {
       } else {
         expect(ctx.answerCallbackQuery).toHaveBeenCalledWith({ text: t("bot.session_busy") });
       }
-      expect(deps.interactionManager.getSnapshot()).toEqual(before);
+      expect(deps.interactionManager.getSnapshot(SCOPE)).toEqual(before);
     });
 
     it.each(["/help", "/status", "/abort", "/detach", "/opencode_stop"])(
@@ -159,7 +170,7 @@ describe("interactionGuardMiddleware", () => {
   });
 
   it("blocks text and replies when callback is expected", async () => {
-    startInteractionForTest(deps.interactionManager, {
+    startGuardInteraction( {
       kind: "inline",
       expectedInput: "callback",
     });
@@ -174,7 +185,7 @@ describe("interactionGuardMiddleware", () => {
   });
 
   it("blocks callback and answers callback query when text is expected", async () => {
-    startInteractionForTest(deps.interactionManager, {
+    startGuardInteraction( {
       kind: "rename",
       expectedInput: "text",
     });
@@ -205,7 +216,7 @@ describe("interactionGuardMiddleware", () => {
   });
 
   it("allows command from allowed list", async () => {
-    startInteractionForTest(deps.interactionManager, {
+    startGuardInteraction( {
       kind: "inline",
       expectedInput: "callback",
       allowedCommands: ["/status"],
@@ -221,7 +232,7 @@ describe("interactionGuardMiddleware", () => {
   });
 
   it("always allows /start even when command list is restricted", async () => {
-    startInteractionForTest(deps.interactionManager, {
+    startGuardInteraction( {
       kind: "inline",
       expectedInput: "callback",
       allowedCommands: ["/status"],
@@ -237,7 +248,7 @@ describe("interactionGuardMiddleware", () => {
   });
 
   it("blocks disallowed command", async () => {
-    startInteractionForTest(deps.interactionManager, {
+    startGuardInteraction( {
       kind: "inline",
       expectedInput: "callback",
       allowedCommands: ["/status"],
@@ -253,7 +264,7 @@ describe("interactionGuardMiddleware", () => {
   });
 
   it("shows permission-specific message for blocked text", async () => {
-    startInteractionForTest(deps.interactionManager, {
+    startGuardInteraction( {
       kind: "permission",
       expectedInput: "callback",
     });
@@ -268,7 +279,7 @@ describe("interactionGuardMiddleware", () => {
   });
 
   it("shows permission-specific message for disallowed command", async () => {
-    startInteractionForTest(deps.interactionManager, {
+    startGuardInteraction( {
       kind: "permission",
       expectedInput: "callback",
       allowedCommands: ["/status"],
@@ -284,7 +295,7 @@ describe("interactionGuardMiddleware", () => {
   });
 
   it("shows rename-specific message for disallowed command", async () => {
-    startInteractionForTest(deps.interactionManager, {
+    startGuardInteraction( {
       kind: "rename",
       expectedInput: "text",
       allowedCommands: ["/status"],
@@ -300,7 +311,7 @@ describe("interactionGuardMiddleware", () => {
   });
 
   it("blocks voice input while rename interaction expects text", async () => {
-    startInteractionForTest(deps.interactionManager, {
+    startGuardInteraction( {
       kind: "rename",
       expectedInput: "text",
     });
@@ -315,7 +326,7 @@ describe("interactionGuardMiddleware", () => {
   });
 
   it("shows question-specific message for blocked text", async () => {
-    startInteractionForTest(deps.interactionManager, {
+    startGuardInteraction( {
       kind: "question",
       expectedInput: "callback",
     });
@@ -330,7 +341,7 @@ describe("interactionGuardMiddleware", () => {
   });
 
   it("shows question-specific message for disallowed command", async () => {
-    startInteractionForTest(deps.interactionManager, {
+    startGuardInteraction( {
       kind: "question",
       expectedInput: "callback",
       allowedCommands: ["/status"],
@@ -346,7 +357,7 @@ describe("interactionGuardMiddleware", () => {
   });
 
   it("allows task cancel callback while text is expected", async () => {
-    startInteractionForTest(deps.interactionManager, {
+    startGuardInteraction( {
       kind: "task",
       expectedInput: "text",
     });
@@ -361,7 +372,7 @@ describe("interactionGuardMiddleware", () => {
   });
 
   it("shows task-specific message for disallowed command", async () => {
-    startInteractionForTest(deps.interactionManager, {
+    startGuardInteraction( {
       kind: "task",
       expectedInput: "text",
       allowedCommands: ["/status"],
@@ -421,7 +432,7 @@ describe("interactionGuardMiddleware", () => {
   it("does not pass media through a blocking interaction to the queue", async () => {
     vi.spyOn(settingsStore, "getPromptQueueMode").mockReturnValue("queue");
     deps.foregroundSessionState.markBusy("session-1", "D:\\Projects\\Repo");
-    startInteractionForTest(deps.interactionManager, { kind: "permission", expectedInput: "callback" });
+    startGuardInteraction( { kind: "permission", expectedInput: "callback" });
     const ctx = createVoiceContext();
     const next: NextFunction = vi.fn().mockResolvedValue(undefined);
 
@@ -503,7 +514,7 @@ describe("interactionGuardMiddleware", () => {
 
   it("allows active question callback while busy", async () => {
     deps.foregroundSessionState.markBusy("session-1", "D:\\Projects\\Repo");
-    startInteractionForTest(deps.interactionManager, {
+    startGuardInteraction( {
       kind: "question",
       expectedInput: "mixed",
     });
@@ -519,7 +530,7 @@ describe("interactionGuardMiddleware", () => {
 
   it("allows active permission callback while busy", async () => {
     deps.foregroundSessionState.markBusy("session-1", "D:\\Projects\\Repo");
-    startInteractionForTest(deps.interactionManager, {
+    startGuardInteraction( {
       kind: "permission",
       expectedInput: "callback",
     });

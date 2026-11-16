@@ -63,10 +63,13 @@ beforeEach(() => {
   container = createTestAppContainer();
 });
 
+/** The scope the test contexts resolve to: no chat named, so chat 0 and no thread. */
+const SCOPE = "0:no-thread";
+
 describe("bot/callbacks/file-browser-callback-handler - attach branch", () => {
   beforeEach(() => {
     promptAttachment.__resetForTests();
-    container.interactionManager.clear("test_reset");
+    container.interactionManager.clear("test_reset", SCOPE);
     mocked.isForegroundBusyMock.mockReturnValue(false);
     mocked.ensureActiveInlineMenuMock.mockResolvedValue(true);
     mocked.clearActiveInlineMenuMock.mockReset();
@@ -83,7 +86,7 @@ describe("bot/callbacks/file-browser-callback-handler - attach branch", () => {
       worktree: PROJECT_ROOT,
       confirmationMessageId: 43,
     });
-    expect(mocked.clearActiveInlineMenuMock).toHaveBeenCalledWith("ls_attached", deps);
+    expect(mocked.clearActiveInlineMenuMock).toHaveBeenCalledWith("ls_attached", ctx, deps);
     expect(ctx.deleteMessage).toHaveBeenCalled();
 
     const [[text, options]] = (ctx.reply as unknown as ReturnType<typeof vi.fn>).mock.calls as [
@@ -96,7 +99,7 @@ describe("bot/callbacks/file-browser-callback-handler - attach branch", () => {
   it("enters the waiting-for-prompt mode", async () => {
     await handleLsCallback(createContext(`${LS_CALLBACK_ATTACH_PREFIX}${FILE_PATH}`), createDeps());
 
-    const state = container.interactionManager.getSnapshot();
+    const state = container.interactionManager.getSnapshot(SCOPE);
     expect(state).toMatchObject({
       kind: "custom",
       expectedInput: "mixed",

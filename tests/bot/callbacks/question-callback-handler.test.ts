@@ -119,13 +119,16 @@ function createDeps() {
 
 let container: AppContainer;
 
+/** The scope every context in this file resolves to: chat 123 with no forum topic. */
+const SCOPE = "123:no-thread";
+
 beforeEach(() => {
   container = createTestAppContainer();
 });
 
 describe("bot question menu/callbacks", () => {
   beforeEach(() => {
-    container.questionManager.clear();
+    container.questionManager.clear(SCOPE);
     container.interactionManager.clear("test_setup");
     mocked.questionReplyMock.mockReset();
     mocked.questionReplyMock.mockResolvedValue({ data: true, error: undefined });
@@ -136,8 +139,8 @@ describe("bot question menu/callbacks", () => {
   it("shows question details and keyboard in one message", async () => {
     const api = createApi([100]);
 
-    container.questionManager.startQuestions([QUESTION_ONE], "req-1", "session-1");
-    await showCurrentQuestion(api, 123, createDeps());
+    container.questionManager.startQuestions([QUESTION_ONE], "req-1", "session-1", SCOPE);
+    await showCurrentQuestion(api, 123, createDeps(), SCOPE);
 
     expect(api.sendRichMessage).toHaveBeenNthCalledWith(
       1,
@@ -161,10 +164,10 @@ describe("bot question menu/callbacks", () => {
     );
     expect(api.sendRichMessage).toHaveBeenCalledTimes(1);
     expect(api.sendMessage).not.toHaveBeenCalled();
-    expect(container.questionManager.getMessageIds()).toEqual([100]);
-    expect(container.questionManager.getActiveMessageId()).toBe(100);
+    expect(container.questionManager.getMessageIds(SCOPE)).toEqual([100]);
+    expect(container.questionManager.getActiveMessageId(SCOPE)).toBe(100);
 
-    const state = container.interactionManager.getSnapshot();
+    const state = container.interactionManager.getSnapshot(SCOPE);
     expect(state?.kind).toBe("question");
     expect(state?.expectedInput).toBe("callback");
     expect(state?.metadata.requestID).toBe("req-1");
@@ -186,8 +189,8 @@ describe("bot question menu/callbacks", () => {
       deleteMessage: vi.fn().mockResolvedValue(true),
     } as unknown as Context["api"];
 
-    container.questionManager.startQuestions([QUESTION_ONE], "req-fallback", "session-1");
-    await showCurrentQuestion(api, 123, createDeps());
+    container.questionManager.startQuestions([QUESTION_ONE], "req-fallback", "session-1", SCOPE);
+    await showCurrentQuestion(api, 123, createDeps(), SCOPE);
 
     expect(sendRichMessage).toHaveBeenCalledTimes(1);
     expect(sendMessage).toHaveBeenCalledTimes(1);
@@ -197,7 +200,7 @@ describe("bot question menu/callbacks", () => {
       expect.stringContaining("❓ 1/1 Q1\n\nPick one\n\nYes — accept\n\nNo — decline"),
       expect.objectContaining({ reply_markup: expect.anything() }),
     );
-    expect(container.questionManager.getActiveMessageId()).toBe(801);
+    expect(container.questionManager.getActiveMessageId(SCOPE)).toBe(801);
   });
 
   it("renders an option without a description as a bold label only", async () => {
@@ -208,8 +211,8 @@ describe("bot question menu/callbacks", () => {
       options: [{ label: "Only label", description: "" }],
     };
 
-    container.questionManager.startQuestions([question], "req-bare", "session-1");
-    await showCurrentQuestion(api, 123, createDeps());
+    container.questionManager.startQuestions([question], "req-bare", "session-1", SCOPE);
+    await showCurrentQuestion(api, 123, createDeps(), SCOPE);
 
     const calls = (api.sendRichMessage as unknown as { mock: { calls: unknown[][] } }).mock.calls;
     const message = defined(calls[0]?.[1]) as { blocks: unknown[] };
@@ -228,8 +231,8 @@ describe("bot question menu/callbacks", () => {
       options: [{ label: "Option", description: "description" }],
     };
 
-    container.questionManager.startQuestions([longQuestion], "req-long", "session-1");
-    await showCurrentQuestion(api, 123, createDeps());
+    container.questionManager.startQuestions([longQuestion], "req-long", "session-1", SCOPE);
+    await showCurrentQuestion(api, 123, createDeps(), SCOPE);
 
     const calls = (api.sendRichMessage as unknown as { mock: { calls: unknown[][] } }).mock.calls;
     const message = defined(calls[0]?.[1]) as { blocks: Array<{ text: unknown }> };
@@ -255,22 +258,22 @@ describe("bot question menu/callbacks", () => {
   it("switches to mixed mode on custom callback and accepts custom text", async () => {
     const api = createApi([101, 102]);
 
-    container.questionManager.startQuestions([QUESTION_ONE, QUESTION_TWO], "req-2", "session-1");
-    await showCurrentQuestion(api, 123, createDeps());
+    container.questionManager.startQuestions([QUESTION_ONE, QUESTION_TWO], "req-2", "session-1", SCOPE);
+    await showCurrentQuestion(api, 123, createDeps(), SCOPE);
 
     const customCtx = createCallbackContext("question:custom:0", 101, api);
     await handleQuestionCallback(customCtx, createDeps());
 
-    expect(container.questionManager.isWaitingForCustomInput(0)).toBe(true);
-    expect(container.interactionManager.getSnapshot()?.expectedInput).toBe("mixed");
+    expect(container.questionManager.isWaitingForCustomInput(0, SCOPE)).toBe(true);
+    expect(container.interactionManager.getSnapshot(SCOPE)?.expectedInput).toBe("mixed");
 
     const textCtx = createTextContext("My custom answer", api);
     await handleQuestionTextAnswer(textCtx, createDeps());
 
-    expect(container.questionManager.getCustomAnswer(0)).toBe("My custom answer");
-    expect(container.questionManager.getCurrentIndex()).toBe(1);
-    expect(container.questionManager.getActiveMessageId()).toBe(102);
-    expect(container.interactionManager.getSnapshot()?.expectedInput).toBe("callback");
+    expect(container.questionManager.getCustomAnswer(0, SCOPE)).toBe("My custom answer");
+    expect(container.questionManager.getCurrentIndex(SCOPE)).toBe(1);
+    expect(container.questionManager.getActiveMessageId(SCOPE)).toBe(102);
+    expect(container.interactionManager.getSnapshot(SCOPE)?.expectedInput).toBe("callback");
 
     expect(api.deleteMessage).toHaveBeenCalledWith(123, 101);
   });
@@ -278,23 +281,23 @@ describe("bot question menu/callbacks", () => {
   it("deletes the question message after single-choice selection", async () => {
     const api = createApi([701, 702]);
 
-    container.questionManager.startQuestions([QUESTION_ONE, QUESTION_TWO], "req-8", "session-1");
-    await showCurrentQuestion(api, 123, createDeps());
+    container.questionManager.startQuestions([QUESTION_ONE, QUESTION_TWO], "req-8", "session-1", SCOPE);
+    await showCurrentQuestion(api, 123, createDeps(), SCOPE);
 
     const selectCtx = createCallbackContext("question:select:0:0", 701, api);
     const handled = await handleQuestionCallback(selectCtx, createDeps());
 
     expect(handled).toBe(true);
     expect(selectCtx.deleteMessage).toHaveBeenCalledOnce();
-    expect(container.questionManager.getCurrentIndex()).toBe(1);
-    expect(container.questionManager.getActiveMessageId()).toBe(702);
+    expect(container.questionManager.getCurrentIndex(SCOPE)).toBe(1);
+    expect(container.questionManager.getActiveMessageId(SCOPE)).toBe(702);
   });
 
   it("rejects stale callback from old question message", async () => {
     const api = createApi([200]);
 
-    container.questionManager.startQuestions([QUESTION_ONE], "req-3", "session-1");
-    await showCurrentQuestion(api, 123, createDeps());
+    container.questionManager.startQuestions([QUESTION_ONE], "req-3", "session-1", SCOPE);
+    await showCurrentQuestion(api, 123, createDeps(), SCOPE);
 
     const staleCtx = createCallbackContext("question:select:0:0", 199, api);
     const handled = await handleQuestionCallback(staleCtx, createDeps());
@@ -304,17 +307,17 @@ describe("bot question menu/callbacks", () => {
       text: t("question.inactive_callback"),
       show_alert: true,
     });
-    expect(container.questionManager.getSelectedOptions(0)).toEqual(new Set<number>());
+    expect(container.questionManager.getSelectedOptions(0, SCOPE)).toEqual(new Set<number>());
   });
 
   it("answers the callback when the current question is already gone", async () => {
     const api = createApi([250]);
 
-    container.questionManager.startQuestions([QUESTION_ONE], "req-stale", "session-1");
-    await showCurrentQuestion(api, 123, createDeps());
+    container.questionManager.startQuestions([QUESTION_ONE], "req-stale", "session-1", SCOPE);
+    await showCurrentQuestion(api, 123, createDeps(), SCOPE);
     // Index past the last question: the message is still active, but there is
     // nothing to answer anymore.
-    container.questionManager.nextQuestion();
+    container.questionManager.nextQuestion(SCOPE);
 
     const ctx = createCallbackContext("question:select:0:0", 250, api);
     const handled = await handleQuestionCallback(ctx, createDeps());
@@ -329,8 +332,8 @@ describe("bot question menu/callbacks", () => {
   it("dismisses the question in OpenCode on Cancel and then closes the poll", async () => {
     const api = createApi([300]);
 
-    container.questionManager.startQuestions([QUESTION_ONE], "req-4", "session-1");
-    await showCurrentQuestion(api, 123, createDeps());
+    container.questionManager.startQuestions([QUESTION_ONE], "req-4", "session-1", SCOPE);
+    await showCurrentQuestion(api, 123, createDeps(), SCOPE);
 
     const cancelCtx = createCallbackContext("question:cancel:0", 300, api);
     const handled = await handleQuestionCallback(cancelCtx, createDeps());
@@ -346,8 +349,8 @@ describe("bot question menu/callbacks", () => {
     });
     expect(cancelCtx.editMessageText).not.toHaveBeenCalled();
     expect(api.deleteMessage).not.toHaveBeenCalled();
-    expect(container.questionManager.isActive()).toBe(false);
-    expect(container.interactionManager.getSnapshot()).toBeNull();
+    expect(container.questionManager.isActive(SCOPE)).toBe(false);
+    expect(container.interactionManager.getSnapshot(SCOPE)).toBeNull();
   });
 
   it("keeps the poll open and ignores its buttons while the dismissal is on its way", async () => {
@@ -359,13 +362,13 @@ describe("bot question menu/callbacks", () => {
       }),
     );
 
-    container.questionManager.startQuestions([QUESTION_ONE], "req-wait", "session-1");
-    await showCurrentQuestion(api, 123, createDeps());
+    container.questionManager.startQuestions([QUESTION_ONE], "req-wait", "session-1", SCOPE);
+    await showCurrentQuestion(api, 123, createDeps(), SCOPE);
     await pressButton("question:custom:0", 301, api);
     await pressButton("question:cancel:0", 301, api);
 
-    expect(container.questionManager.isActive()).toBe(true);
-    expect(container.questionManager.isWaitingForCustomInput(0)).toBe(false);
+    expect(container.questionManager.isActive(SCOPE)).toBe(true);
+    expect(container.questionManager.isWaitingForCustomInput(0, SCOPE)).toBe(false);
     expect(api.editMessageText).not.toHaveBeenCalled();
 
     const selectCtx = createCallbackContext("question:select:0:0", 301, api);
@@ -382,7 +385,7 @@ describe("bot question menu/callbacks", () => {
 
     resolveReject({ data: true, error: undefined });
     await vi.waitFor(() => {
-      expect(container.questionManager.isActive()).toBe(false);
+      expect(container.questionManager.isActive(SCOPE)).toBe(false);
     });
   });
 
@@ -393,8 +396,8 @@ describe("bot question menu/callbacks", () => {
       error: new Error("fetch failed"),
     });
 
-    container.questionManager.startQuestions([QUESTION_ONE], "req-fail", "session-1");
-    await showCurrentQuestion(api, 123, createDeps());
+    container.questionManager.startQuestions([QUESTION_ONE], "req-fail", "session-1", SCOPE);
+    await showCurrentQuestion(api, 123, createDeps(), SCOPE);
     await pressButton("question:cancel:0", 302, api);
 
     const editMock = api.editMessageText as unknown as ReturnType<typeof vi.fn>;
@@ -406,9 +409,9 @@ describe("bot question menu/callbacks", () => {
     expect(JSON.stringify(content)).toContain(t("permission.delivery_failed"));
     expect(JSON.stringify(content)).toContain(QUESTION_ONE.question);
     expect(options).toHaveProperty("reply_markup");
-    expect(container.questionManager.isActive()).toBe(true);
-    expect(container.questionManager.isDismissing()).toBe(false);
-    expect(container.questionManager.hasLastCancelFailed()).toBe(true);
+    expect(container.questionManager.isActive(SCOPE)).toBe(true);
+    expect(container.questionManager.isDismissing(SCOPE)).toBe(false);
+    expect(container.questionManager.hasLastCancelFailed(SCOPE)).toBe(true);
 
     await pressButton("question:cancel:0", 302, api);
 
@@ -416,14 +419,14 @@ describe("bot question menu/callbacks", () => {
     await vi.waitFor(() => {
       expect(api.editMessageText).toHaveBeenCalledWith(123, 302, t("question.cancelled"));
     });
-    expect(container.questionManager.isActive()).toBe(false);
+    expect(container.questionManager.isActive(SCOPE)).toBe(false);
   });
 
   it("warns instead of closing the poll when there is no request to dismiss", async () => {
     const api = createApi([310]);
 
-    container.questionManager.startQuestions([QUESTION_ONE], "", "session-1");
-    await showCurrentQuestion(api, 123, createDeps());
+    container.questionManager.startQuestions([QUESTION_ONE], "", "session-1", SCOPE);
+    await showCurrentQuestion(api, 123, createDeps(), SCOPE);
     await pressButton("question:cancel:0", 310, api);
 
     expect(mocked.questionRejectMock).not.toHaveBeenCalled();
@@ -432,18 +435,18 @@ describe("bot question menu/callbacks", () => {
     expect(messageId).toBe(310);
     expect(JSON.stringify(content)).toContain(t("permission.delivery_failed"));
     expect(options).toHaveProperty("reply_markup");
-    expect(container.questionManager.isActive()).toBe(true);
+    expect(container.questionManager.isActive(SCOPE)).toBe(true);
   });
 
   it("answers normally when a choice is tapped after a failed dismissal", async () => {
     const api = createApi([304, 305]);
     mocked.questionRejectMock.mockResolvedValueOnce({ data: undefined, error: { name: "Boom" } });
 
-    container.questionManager.startQuestions([QUESTION_ONE], "req-choice", "session-1");
-    await showCurrentQuestion(api, 123, createDeps());
+    container.questionManager.startQuestions([QUESTION_ONE], "req-choice", "session-1", SCOPE);
+    await showCurrentQuestion(api, 123, createDeps(), SCOPE);
     await pressButton("question:cancel:0", 304, api);
     await vi.waitFor(() => {
-      expect(container.questionManager.hasLastCancelFailed()).toBe(true);
+      expect(container.questionManager.hasLastCancelFailed(SCOPE)).toBe(true);
     });
 
     await pressButton("question:select:0:1", 304, api);
@@ -451,7 +454,7 @@ describe("bot question menu/callbacks", () => {
     expect(mocked.questionReplyMock).toHaveBeenCalledWith(
       expect.objectContaining({ requestID: "req-choice" }),
     );
-    expect(container.questionManager.isActive()).toBe(false);
+    expect(container.questionManager.isActive(SCOPE)).toBe(false);
   });
 
   it.each([
@@ -461,8 +464,8 @@ describe("bot question menu/callbacks", () => {
     const api = createApi([306]);
     mocked.questionRejectMock.mockResolvedValueOnce({ data: undefined, error });
 
-    container.questionManager.startQuestions([QUESTION_ONE], "req-gone", "session-1");
-    await showCurrentQuestion(api, 123, createDeps());
+    container.questionManager.startQuestions([QUESTION_ONE], "req-gone", "session-1", SCOPE);
+    await showCurrentQuestion(api, 123, createDeps(), SCOPE);
     await pressButton("question:cancel:0", 306, api);
 
     const editMock = api.editMessageText as unknown as ReturnType<typeof vi.fn>;
@@ -472,18 +475,18 @@ describe("bot question menu/callbacks", () => {
     const [, , content, options] = defined(editMock.mock.calls[0]);
     expect(JSON.stringify(content)).toContain(t("question.settled_outside.cancelled"));
     expect(options ?? {}).not.toHaveProperty("reply_markup");
-    expect(container.questionManager.isActive()).toBe(false);
+    expect(container.questionManager.isActive(SCOPE)).toBe(false);
   });
 
   it("closes the poll as answered outside when OpenCode reported an answer meanwhile", async () => {
     const api = createApi([307]);
     mocked.questionRejectMock.mockImplementationOnce(async () => {
-      container.questionManager.noteSettledWhileSending("answered");
+      container.questionManager.noteSettledWhileSending("answered", SCOPE);
       return { data: undefined, error: { name: "NotFoundError" } };
     });
 
-    container.questionManager.startQuestions([QUESTION_ONE], "req-answered", "session-1");
-    await showCurrentQuestion(api, 123, createDeps());
+    container.questionManager.startQuestions([QUESTION_ONE], "req-answered", "session-1", SCOPE);
+    await showCurrentQuestion(api, 123, createDeps(), SCOPE);
     await pressButton("question:cancel:0", 307, api);
 
     const editMock = api.editMessageText as unknown as ReturnType<typeof vi.fn>;
@@ -498,18 +501,18 @@ describe("bot question menu/callbacks", () => {
   it("closes the poll as cancelled when the reply was lost but OpenCode reported the dismissal", async () => {
     const api = createApi([308]);
     mocked.questionRejectMock.mockImplementationOnce(async () => {
-      container.questionManager.noteSettledWhileSending("cancelled");
+      container.questionManager.noteSettledWhileSending("cancelled", SCOPE);
       throw new Error("socket hang up");
     });
 
-    container.questionManager.startQuestions([QUESTION_ONE], "req-lost", "session-1");
-    await showCurrentQuestion(api, 123, createDeps());
+    container.questionManager.startQuestions([QUESTION_ONE], "req-lost", "session-1", SCOPE);
+    await showCurrentQuestion(api, 123, createDeps(), SCOPE);
     await pressButton("question:cancel:0", 308, api);
 
     await vi.waitFor(() => {
       expect(api.editMessageText).toHaveBeenCalledWith(123, 308, t("question.cancelled"));
     });
-    expect(container.questionManager.isActive()).toBe(false);
+    expect(container.questionManager.isActive(SCOPE)).toBe(false);
   });
 
   it("changes nothing when the poll was ended before the dismissal came back", async () => {
@@ -521,8 +524,8 @@ describe("bot question menu/callbacks", () => {
       }),
     );
 
-    container.questionManager.startQuestions([QUESTION_ONE], "req-reset", "session-1");
-    await showCurrentQuestion(api, 123, createDeps());
+    container.questionManager.startQuestions([QUESTION_ONE], "req-reset", "session-1", SCOPE);
+    await showCurrentQuestion(api, 123, createDeps(), SCOPE);
     await pressButton("question:cancel:0", 309, api);
 
     container.interactionManager.reset("abort_command");
@@ -535,8 +538,8 @@ describe("bot question menu/callbacks", () => {
   it("requires at least one selected option on multiple submit", async () => {
     const api = createApi([400]);
 
-    container.questionManager.startQuestions([MULTIPLE_QUESTION], "req-5", "session-1");
-    await showCurrentQuestion(api, 123, createDeps());
+    container.questionManager.startQuestions([MULTIPLE_QUESTION], "req-5", "session-1", SCOPE);
+    await showCurrentQuestion(api, 123, createDeps(), SCOPE);
 
     const submitCtx = createCallbackContext("question:submit:0", 400, api);
     const handled = await handleQuestionCallback(submitCtx, createDeps());
@@ -546,14 +549,14 @@ describe("bot question menu/callbacks", () => {
       text: t("question.select_one_required_callback"),
       show_alert: true,
     });
-    expect(container.questionManager.isActive()).toBe(true);
+    expect(container.questionManager.isActive(SCOPE)).toBe(true);
   });
 
   it("updates question message on multiple selection with compact button label", async () => {
     const api = createApi([500]);
 
-    container.questionManager.startQuestions([MULTIPLE_QUESTION], "req-6", "session-1");
-    await showCurrentQuestion(api, 123, createDeps());
+    container.questionManager.startQuestions([MULTIPLE_QUESTION], "req-6", "session-1", SCOPE);
+    await showCurrentQuestion(api, 123, createDeps(), SCOPE);
 
     const selectCtx = createCallbackContext("question:select:0:0", 500, api);
     const handled = await handleQuestionCallback(selectCtx, createDeps());
@@ -584,30 +587,30 @@ describe("bot question menu/callbacks", () => {
   it("keeps requiring custom button before accepting text answer", async () => {
     const api = createApi([600]);
 
-    container.questionManager.startQuestions([QUESTION_ONE], "req-7", "session-1");
-    await showCurrentQuestion(api, 123, createDeps());
+    container.questionManager.startQuestions([QUESTION_ONE], "req-7", "session-1", SCOPE);
+    await showCurrentQuestion(api, 123, createDeps(), SCOPE);
 
     const textCtx = createTextContext("Typed without custom button", api);
     await handleQuestionTextAnswer(textCtx, createDeps());
 
     expect(textCtx.reply).toHaveBeenCalledWith(t("question.use_custom_button_first"));
-    expect(container.questionManager.getCurrentIndex()).toBe(0);
+    expect(container.questionManager.getCurrentIndex(SCOPE)).toBe(0);
   });
 
   it("keeps a multi-select question open after custom text and re-sends it with the custom row", async () => {
     const api = createApi([800, 801]);
 
-    container.questionManager.startQuestions([MULTIPLE_QUESTION], "req-multi-custom", "session-1");
-    await showCurrentQuestion(api, 123, createDeps());
+    container.questionManager.startQuestions([MULTIPLE_QUESTION], "req-multi-custom", "session-1", SCOPE);
+    await showCurrentQuestion(api, 123, createDeps(), SCOPE);
 
     await pressButton("question:select:0:1", 800, api);
     await pressButton("question:custom:0", 800, api);
     await handleQuestionTextAnswer(createTextContext("My\nown answer", api), createDeps());
 
     expect(api.deleteMessage).toHaveBeenCalledWith(123, 800);
-    expect(container.questionManager.getCurrentIndex()).toBe(0);
-    expect(container.questionManager.getActiveMessageId()).toBe(801);
-    expect(container.interactionManager.getSnapshot()?.expectedInput).toBe("callback");
+    expect(container.questionManager.getCurrentIndex(SCOPE)).toBe(0);
+    expect(container.questionManager.getActiveMessageId(SCOPE)).toBe(801);
+    expect(container.interactionManager.getSnapshot(SCOPE)?.expectedInput).toBe("callback");
     expect(api.sendRichMessage).toHaveBeenLastCalledWith(123, expect.anything(), {
       reply_markup: expect.objectContaining({
         inline_keyboard: [
@@ -625,8 +628,8 @@ describe("bot question menu/callbacks", () => {
   it("replaces the custom text when a new one is sent to a multi-select question", async () => {
     const api = createApi([810, 811, 812]);
 
-    container.questionManager.startQuestions([MULTIPLE_QUESTION], "req-multi-replace", "session-1");
-    await showCurrentQuestion(api, 123, createDeps());
+    container.questionManager.startQuestions([MULTIPLE_QUESTION], "req-multi-replace", "session-1", SCOPE);
+    await showCurrentQuestion(api, 123, createDeps(), SCOPE);
 
     await pressButton("question:custom:0", 810, api);
     await handleQuestionTextAnswer(createTextContext("First", api), createDeps());
@@ -636,23 +639,23 @@ describe("bot question menu/callbacks", () => {
     await handleQuestionTextAnswer(textCtx, createDeps());
 
     expect(textCtx.reply).not.toHaveBeenCalled();
-    expect(container.questionManager.getCustomAnswer(0)).toBe("Second");
-    expect(container.questionManager.isCustomAnswerSelected(0)).toBe(true);
-    expect(container.questionManager.getActiveMessageId()).toBe(812);
+    expect(container.questionManager.getCustomAnswer(0, SCOPE)).toBe("Second");
+    expect(container.questionManager.isCustomAnswerSelected(0, SCOPE)).toBe(true);
+    expect(container.questionManager.getActiveMessageId(SCOPE)).toBe(812);
   });
 
   it("toggles the custom row in place", async () => {
     const api = createApi([820, 821]);
 
-    container.questionManager.startQuestions([MULTIPLE_QUESTION], "req-multi-toggle", "session-1");
-    await showCurrentQuestion(api, 123, createDeps());
+    container.questionManager.startQuestions([MULTIPLE_QUESTION], "req-multi-toggle", "session-1", SCOPE);
+    await showCurrentQuestion(api, 123, createDeps(), SCOPE);
     await pressButton("question:custom:0", 820, api);
     await handleQuestionTextAnswer(createTextContext("Mine", api), createDeps());
 
     const toggleCtx = createCallbackContext("question:toggle_custom:0", 821, api);
     await handleQuestionCallback(toggleCtx, createDeps());
 
-    expect(container.questionManager.isCustomAnswerSelected(0)).toBe(false);
+    expect(container.questionManager.isCustomAnswerSelected(0, SCOPE)).toBe(false);
     expect(toggleCtx.answerCallbackQuery).toHaveBeenCalledWith();
     expect(api.editMessageText).toHaveBeenLastCalledWith(123, 821, expect.anything(), {
       reply_markup: expect.objectContaining({
@@ -669,14 +672,14 @@ describe("bot question menu/callbacks", () => {
       text: t("question.select_one_required_callback"),
       show_alert: true,
     });
-    expect(container.questionManager.isActive()).toBe(true);
+    expect(container.questionManager.isActive(SCOPE)).toBe(true);
   });
 
   it("sends the ticked options and the ticked custom text on submit", async () => {
     const api = createApi([830, 831, 832]);
 
-    container.questionManager.startQuestions([MULTIPLE_QUESTION], "req-multi-submit", "session-1");
-    await showCurrentQuestion(api, 123, createDeps());
+    container.questionManager.startQuestions([MULTIPLE_QUESTION], "req-multi-submit", "session-1", SCOPE);
+    await showCurrentQuestion(api, 123, createDeps(), SCOPE);
     await pressButton("question:custom:0", 830, api);
     await handleQuestionTextAnswer(createTextContext("Line one\nline two", api), createDeps());
     await pressButton("question:select:0:0", 831, api);
@@ -693,31 +696,31 @@ describe("bot question menu/callbacks", () => {
         t("question.summary.answer", { answer: "* One: 1\nLine one\nline two" }),
       ),
     );
-    expect(container.questionManager.isActive()).toBe(false);
+    expect(container.questionManager.isActive(SCOPE)).toBe(false);
   });
 
   it("marks the poll as answered from Telegram before its answers go out", async () => {
     const api = createApi([850, 851]);
     const markedAtReply: boolean[] = [];
     mocked.questionReplyMock.mockImplementation(async () => {
-      markedAtReply.push(container.questionManager.isAnswering());
+      markedAtReply.push(container.questionManager.isAnswering(SCOPE));
       return { data: true, error: undefined };
     });
 
-    container.questionManager.startQuestions([QUESTION_ONE], "req-mark", "session-1");
-    await showCurrentQuestion(api, 123, createDeps());
+    container.questionManager.startQuestions([QUESTION_ONE], "req-mark", "session-1", SCOPE);
+    await showCurrentQuestion(api, 123, createDeps(), SCOPE);
     await pressButton("question:select:0:0", 850, api);
 
     expect(markedAtReply).toEqual([true]);
-    expect(container.questionManager.isActive()).toBe(false);
+    expect(container.questionManager.isActive(SCOPE)).toBe(false);
   });
 
   it("closes a poll settled outside Telegram with its line and no buttons", async () => {
     const api = createApi([860]);
 
-    container.questionManager.startQuestions([QUESTION_ONE], "req-outside", "session-1");
-    await showCurrentQuestion(api, 123, createDeps());
-    await closeQuestionSettledOutside(api, 123, "cancelled", createDeps());
+    container.questionManager.startQuestions([QUESTION_ONE], "req-outside", "session-1", SCOPE);
+    await showCurrentQuestion(api, 123, createDeps(), SCOPE);
+    await closeQuestionSettledOutside(api, 123, "cancelled", createDeps(), SCOPE);
 
     const editMock = api.editMessageText as unknown as ReturnType<typeof vi.fn>;
     const [chatId, messageId, content, options] = defined(editMock.mock.calls[0]);
@@ -726,15 +729,15 @@ describe("bot question menu/callbacks", () => {
     expect(JSON.stringify(content)).toContain(t("question.settled_outside.cancelled"));
     expect(JSON.stringify(content)).toContain(QUESTION_ONE.question);
     expect(options ?? {}).not.toHaveProperty("reply_markup");
-    expect(container.questionManager.isActive()).toBe(false);
-    expect(container.interactionManager.getSnapshot()).toBeNull();
+    expect(container.questionManager.isActive(SCOPE)).toBe(false);
+    expect(container.interactionManager.getSnapshot(SCOPE)).toBeNull();
   });
 
   it("submits a multi-select question whose only ticked item is the custom text", async () => {
     const api = createApi([840, 841]);
 
-    container.questionManager.startQuestions([MULTIPLE_QUESTION], "req-multi-only-custom", "session-1");
-    await showCurrentQuestion(api, 123, createDeps());
+    container.questionManager.startQuestions([MULTIPLE_QUESTION], "req-multi-only-custom", "session-1", SCOPE);
+    await showCurrentQuestion(api, 123, createDeps(), SCOPE);
     await pressButton("question:custom:0", 840, api);
     await handleQuestionTextAnswer(createTextContext("Only mine", api), createDeps());
     await pressButton("question:submit:0", 841, api);
@@ -747,8 +750,8 @@ describe("bot question menu/callbacks", () => {
   it("offers the custom answer button only when the question accepts one", async () => {
     const keyboardRows = async (question: Question): Promise<string[]> => {
       const api = createApi([900]);
-      container.questionManager.startQuestions([question], "req-custom-flag", "session-1");
-      await showCurrentQuestion(api, 123, createDeps());
+      container.questionManager.startQuestions([question], "req-custom-flag", "session-1", SCOPE);
+      await showCurrentQuestion(api, 123, createDeps(), SCOPE);
       const options = vi.mocked(api.sendRichMessage).mock.calls[0]?.[2] as {
         reply_markup: { inline_keyboard: Array<Array<{ callback_data: string }>> };
       };
@@ -785,8 +788,8 @@ describe("bot question menu/callbacks", () => {
       ],
     };
 
-    container.questionManager.startQuestions([searchQuestion, QUESTION_ONE], "req-values", "session-1");
-    await showCurrentQuestion(api, 123, createDeps());
+    container.questionManager.startQuestions([searchQuestion, QUESTION_ONE], "req-values", "session-1", SCOPE);
+    await showCurrentQuestion(api, 123, createDeps(), SCOPE);
     await pressButton("question:select:0:0", 910, api);
     await pressButton("question:select:1:1", 911, api);
 
@@ -826,12 +829,12 @@ describe("poll answers delivered to OpenCode", () => {
       }),
     );
 
-    container.questionManager.startQuestions([QUESTION_ONE], "req-wait", "session-1");
-    await showCurrentQuestion(api, 123, createDeps());
+    container.questionManager.startQuestions([QUESTION_ONE], "req-wait", "session-1", SCOPE);
+    await showCurrentQuestion(api, 123, createDeps(), SCOPE);
     await pressButton("question:select:0:0", 900, api);
 
     expect(api.deleteMessage).not.toHaveBeenCalledWith(123, 900);
-    expect(container.questionManager.isAnswering()).toBe(true);
+    expect(container.questionManager.isAnswering(SCOPE)).toBe(true);
 
     // Buttons do nothing while the answers are on their way.
     await pressButton("question:select:0:1", 900, api);
@@ -839,7 +842,7 @@ describe("poll answers delivered to OpenCode", () => {
 
     resolveReply({ data: true, error: undefined });
     await vi.waitFor(() => {
-      expect(container.questionManager.isActive()).toBe(false);
+      expect(container.questionManager.isActive(SCOPE)).toBe(false);
     });
     expect(api.deleteMessage).toHaveBeenCalledWith(123, 900);
     expect(api.sendMessage).toHaveBeenLastCalledWith(
@@ -855,8 +858,8 @@ describe("poll answers delivered to OpenCode", () => {
       error: { _tag: "FormInvalidAnswerError", message: "invalid" },
     });
 
-    container.questionManager.startQuestions([QUESTION_ONE, QUESTION_TWO], "req-fail", "session-1");
-    await showCurrentQuestion(api, 123, createDeps());
+    container.questionManager.startQuestions([QUESTION_ONE, QUESTION_TWO], "req-fail", "session-1", SCOPE);
+    await showCurrentQuestion(api, 123, createDeps(), SCOPE);
     await pressButton("question:select:0:0", 910, api);
     await pressButton("question:select:1:0", 911, api);
 
@@ -865,14 +868,14 @@ describe("poll answers delivered to OpenCode", () => {
     });
     const editMock = api.editMessageText as unknown as ReturnType<typeof vi.fn>;
     expect(defined(editMock.mock.calls.at(-1))[3]).toHaveProperty("reply_markup");
-    expect(container.questionManager.isActive()).toBe(true);
-    expect(container.questionManager.getCurrentIndex()).toBe(1);
+    expect(container.questionManager.isActive(SCOPE)).toBe(true);
+    expect(container.questionManager.getCurrentIndex(SCOPE)).toBe(1);
     expect(api.deleteMessage).not.toHaveBeenCalledWith(123, 911);
 
     await pressButton("question:select:1:1", 911, api);
 
     await vi.waitFor(() => {
-      expect(container.questionManager.isActive()).toBe(false);
+      expect(container.questionManager.isActive(SCOPE)).toBe(false);
     });
     expect(mocked.questionReplyMock).toHaveBeenCalledTimes(2);
     expect(mocked.questionReplyMock.mock.calls[1]?.[0]).toMatchObject({
@@ -888,12 +891,12 @@ describe("poll answers delivered to OpenCode", () => {
     const api = createApi([920]);
     mocked.questionReplyMock.mockResolvedValueOnce({ data: undefined, error });
 
-    container.questionManager.startQuestions([QUESTION_ONE], "req-gone", "session-1");
-    await showCurrentQuestion(api, 123, createDeps());
+    container.questionManager.startQuestions([QUESTION_ONE], "req-gone", "session-1", SCOPE);
+    await showCurrentQuestion(api, 123, createDeps(), SCOPE);
     await pressButton("question:select:0:0", 920, api);
 
     await vi.waitFor(() => {
-      expect(container.questionManager.isActive()).toBe(false);
+      expect(container.questionManager.isActive(SCOPE)).toBe(false);
     });
     expect(editsOf(api, 920).join()).toContain(t("question.settled_outside.answered"));
     expect(editsOf(api, 920).join()).not.toContain(t("permission.delivery_failed"));
@@ -902,16 +905,16 @@ describe("poll answers delivered to OpenCode", () => {
   it("closes the poll as cancelled outside when OpenCode reported a cancel meanwhile", async () => {
     const api = createApi([925]);
     mocked.questionReplyMock.mockImplementationOnce(async () => {
-      container.questionManager.noteSettledWhileSending("cancelled");
+      container.questionManager.noteSettledWhileSending("cancelled", SCOPE);
       return { data: undefined, error: { _tag: "FormAlreadySettledError", message: "settled" } };
     });
 
-    container.questionManager.startQuestions([QUESTION_ONE], "req-cancelled", "session-1");
-    await showCurrentQuestion(api, 123, createDeps());
+    container.questionManager.startQuestions([QUESTION_ONE], "req-cancelled", "session-1", SCOPE);
+    await showCurrentQuestion(api, 123, createDeps(), SCOPE);
     await pressButton("question:select:0:0", 925, api);
 
     await vi.waitFor(() => {
-      expect(container.questionManager.isActive()).toBe(false);
+      expect(container.questionManager.isActive(SCOPE)).toBe(false);
     });
     expect(editsOf(api, 925).join()).toContain(t("question.settled_outside.cancelled"));
   });
@@ -923,15 +926,15 @@ describe("poll answers delivered to OpenCode", () => {
       error: new Error("fetch failed"),
     });
 
-    container.questionManager.startQuestions([QUESTION_ONE], "req-custom", "session-1");
-    await showCurrentQuestion(api, 123, createDeps());
+    container.questionManager.startQuestions([QUESTION_ONE], "req-custom", "session-1", SCOPE);
+    await showCurrentQuestion(api, 123, createDeps(), SCOPE);
     await pressButton("question:custom:0", 930, api);
     await handleQuestionTextAnswer(createTextContext("my own", api), createDeps());
 
     await vi.waitFor(() => {
       expect(editsOf(api, 930).join()).toContain(t("permission.delivery_failed"));
     });
-    expect(container.questionManager.hasCustomAnswer(0)).toBe(false);
+    expect(container.questionManager.hasCustomAnswer(0, SCOPE)).toBe(false);
 
     const strayText = createTextContext("again", api);
     await handleQuestionTextAnswer(strayText, createDeps());
@@ -941,7 +944,7 @@ describe("poll answers delivered to OpenCode", () => {
     await handleQuestionTextAnswer(createTextContext("my own again", api), createDeps());
 
     await vi.waitFor(() => {
-      expect(container.questionManager.isActive()).toBe(false);
+      expect(container.questionManager.isActive(SCOPE)).toBe(false);
     });
     expect(mocked.questionReplyMock.mock.calls[1]?.[0]).toMatchObject({
       answers: [["my own again"]],
@@ -955,12 +958,12 @@ describe("poll answers delivered to OpenCode", () => {
       return { data: undefined, error: new Error("fetch failed") };
     });
 
-    container.questionManager.startQuestions([QUESTION_ONE], "req-reset", "session-1");
-    await showCurrentQuestion(api, 123, createDeps());
+    container.questionManager.startQuestions([QUESTION_ONE], "req-reset", "session-1", SCOPE);
+    await showCurrentQuestion(api, 123, createDeps(), SCOPE);
     await pressButton("question:select:0:0", 940, api);
     await new Promise((resolve) => setTimeout(resolve, 20));
 
-    expect(container.questionManager.isActive()).toBe(false);
+    expect(container.questionManager.isActive(SCOPE)).toBe(false);
     expect(editsOf(api, 940).join()).not.toContain(t("permission.delivery_failed"));
   });
 
@@ -975,25 +978,25 @@ describe("poll answers delivered to OpenCode", () => {
     (api.sendRichMessage as unknown as ReturnType<typeof vi.fn>).mockImplementationOnce(held);
 
     // As the attach restore does: open the slot, then send the poll.
-    container.questionManager.startQuestions([QUESTION_ONE], "req-restored", "session-1");
-    const shown = showCurrentQuestion(api, 123, createDeps());
+    container.questionManager.startQuestions([QUESTION_ONE], "req-restored", "session-1", SCOPE);
+    const shown = showCurrentQuestion(api, 123, createDeps(), SCOPE);
     container.questionManager.endInFlightForSession("session-1", "not_answered");
     land();
     await shown;
 
     expect(editsOf(api, 960).join()).toContain(t("question.not_answered"));
-    expect(container.interactionManager.getSnapshot()).toBeNull();
+    expect(container.interactionManager.getSnapshot(SCOPE)).toBeNull();
   });
 
   it("leaves a poll settled outside Telegram while its tap was acknowledged with its line", async () => {
     const api = createApi([970]);
 
-    container.questionManager.startQuestions([QUESTION_ONE], "req-race", "session-1");
-    await showCurrentQuestion(api, 123, createDeps());
+    container.questionManager.startQuestions([QUESTION_ONE], "req-race", "session-1", SCOPE);
+    await showCurrentQuestion(api, 123, createDeps(), SCOPE);
     const ctx = createCallbackContext("question:select:0:0", 970, api);
     (ctx.answerCallbackQuery as unknown as ReturnType<typeof vi.fn>).mockImplementation(
       async () => {
-        await closeQuestionSettledOutside(api, 123, "cancelled", createDeps());
+        await closeQuestionSettledOutside(api, 123, "cancelled", createDeps(), SCOPE);
       },
     );
 
@@ -1012,12 +1015,12 @@ describe("poll answers delivered to OpenCode", () => {
       error: { _tag: "FormAlreadySettledError", message: "settled" },
     });
 
-    container.questionManager.startQuestions([QUESTION_ONE], "req-cancel-gone", "session-1");
-    await showCurrentQuestion(api, 123, createDeps());
+    container.questionManager.startQuestions([QUESTION_ONE], "req-cancel-gone", "session-1", SCOPE);
+    await showCurrentQuestion(api, 123, createDeps(), SCOPE);
     await pressButton("question:cancel:0", 950, api);
 
     await vi.waitFor(() => {
-      expect(container.questionManager.isActive()).toBe(false);
+      expect(container.questionManager.isActive(SCOPE)).toBe(false);
     });
     expect(editsOf(api, 950).join()).toContain(t("question.settled_outside.cancelled"));
   });

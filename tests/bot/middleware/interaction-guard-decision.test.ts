@@ -7,6 +7,16 @@ import type { AppContainer } from "../../../src/app/bootstrap/app-container.js";
 
 let deps: AppContainer;
 
+/** The scope the test contexts resolve to: no chat named, so chat 0 and no thread. */
+const SCOPE = "0:no-thread";
+
+/** Opens the guard's scope by hand: the contexts below carry no chat of their own. */
+function startGuardInteraction(
+  options: Parameters<typeof startInteractionForTest>[1],
+): ReturnType<typeof startInteractionForTest> {
+  return startInteractionForTest(deps.interactionManager, options, SCOPE);
+}
+
 function createContext({
   text,
   callbackData,
@@ -65,7 +75,7 @@ describe("interaction guard", () => {
   });
 
   it("blocks text when callback input is expected", () => {
-    startInteractionForTest(deps.interactionManager, {
+    startGuardInteraction( {
       kind: "inline",
       expectedInput: "callback",
     });
@@ -78,7 +88,7 @@ describe("interaction guard", () => {
   });
 
   it("allows callback when callback input is expected", () => {
-    startInteractionForTest(deps.interactionManager, {
+    startGuardInteraction( {
       kind: "inline",
       expectedInput: "callback",
     });
@@ -92,7 +102,7 @@ describe("interaction guard", () => {
   });
 
   it("allows command from allowed commands list", () => {
-    startInteractionForTest(deps.interactionManager, {
+    startGuardInteraction( {
       kind: "inline",
       expectedInput: "callback",
       allowedCommands: ["/status"],
@@ -105,7 +115,7 @@ describe("interaction guard", () => {
   });
 
   it("always allows /start even when command list is restricted", () => {
-    startInteractionForTest(deps.interactionManager, {
+    startGuardInteraction( {
       kind: "inline",
       expectedInput: "callback",
       allowedCommands: ["/status"],
@@ -118,7 +128,7 @@ describe("interaction guard", () => {
   });
 
   it("blocks command that is not allowed", () => {
-    startInteractionForTest(deps.interactionManager, {
+    startGuardInteraction( {
       kind: "inline",
       expectedInput: "callback",
       allowedCommands: ["/status"],
@@ -135,7 +145,7 @@ describe("interaction guard", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
 
-    startInteractionForTest(deps.interactionManager, {
+    startGuardInteraction( {
       kind: "permission",
       expectedInput: "callback",
       expiresInMs: 1000,
@@ -147,11 +157,11 @@ describe("interaction guard", () => {
 
     expect(decision.allow).toBe(false);
     expect(decision.reason).toBe("expired");
-    expect(deps.interactionManager.isActive()).toBe(false);
+    expect(deps.interactionManager.isActive(SCOPE)).toBe(false);
   });
 
   it("allows mixed input for non-command events", () => {
-    startInteractionForTest(deps.interactionManager, {
+    startGuardInteraction( {
       kind: "question",
       expectedInput: "mixed",
     });
@@ -174,7 +184,7 @@ describe("interaction guard", () => {
   });
 
   it("blocks voice input when text input is expected", () => {
-    startInteractionForTest(deps.interactionManager, {
+    startGuardInteraction( {
       kind: "rename",
       expectedInput: "text",
     });
@@ -187,7 +197,7 @@ describe("interaction guard", () => {
   });
 
   it("blocks audio input when mixed input is expected", () => {
-    startInteractionForTest(deps.interactionManager, {
+    startGuardInteraction( {
       kind: "question",
       expectedInput: "mixed",
     });
@@ -200,7 +210,7 @@ describe("interaction guard", () => {
   });
 
   it("blocks text while permission interaction is active", () => {
-    startInteractionForTest(deps.interactionManager, {
+    startGuardInteraction( {
       kind: "permission",
       expectedInput: "callback",
     });
@@ -213,7 +223,7 @@ describe("interaction guard", () => {
   });
 
   it("allows default status command while permission interaction is active", () => {
-    startInteractionForTest(deps.interactionManager, {
+    startGuardInteraction( {
       kind: "permission",
       expectedInput: "callback",
     });
@@ -226,7 +236,7 @@ describe("interaction guard", () => {
   });
 
   it("blocks disallowed command while question mixed interaction is active", () => {
-    startInteractionForTest(deps.interactionManager, {
+    startGuardInteraction( {
       kind: "question",
       expectedInput: "mixed",
       allowedCommands: ["/status"],
@@ -240,7 +250,7 @@ describe("interaction guard", () => {
   });
 
   it("allows rename cancel callback when rename expects text", () => {
-    startInteractionForTest(deps.interactionManager, {
+    startGuardInteraction( {
       kind: "rename",
       expectedInput: "text",
     });
@@ -255,7 +265,7 @@ describe("interaction guard", () => {
   });
 
   it("blocks non-rename callback while rename expects text", () => {
-    startInteractionForTest(deps.interactionManager, {
+    startGuardInteraction( {
       kind: "rename",
       expectedInput: "text",
     });
@@ -270,7 +280,7 @@ describe("interaction guard", () => {
   });
 
   it("blocks photo input when text input is expected (rename)", () => {
-    startInteractionForTest(deps.interactionManager, {
+    startGuardInteraction( {
       kind: "rename",
       expectedInput: "text",
     });
@@ -284,7 +294,7 @@ describe("interaction guard", () => {
   });
 
   it("blocks photo input when mixed input is expected (question)", () => {
-    startInteractionForTest(deps.interactionManager, {
+    startGuardInteraction( {
       kind: "question",
       expectedInput: "mixed",
     });
@@ -328,7 +338,7 @@ describe("interaction guard", () => {
   });
 
   it("allows opencode_stop during an active interaction without busy", () => {
-    startInteractionForTest(deps.interactionManager, {
+    startGuardInteraction( {
       kind: "inline",
       expectedInput: "callback",
     });
@@ -369,7 +379,7 @@ describe("interaction guard", () => {
 
   it("allows valid question answers while busy", () => {
     deps.foregroundSessionState.markBusy("session-1", "D:\\Projects\\Repo");
-    startInteractionForTest(deps.interactionManager, {
+    startGuardInteraction( {
       kind: "question",
       expectedInput: "mixed",
     });
@@ -394,7 +404,7 @@ describe("interaction guard", () => {
 
   it("allows valid permission callback while busy and blocks other inputs", () => {
     deps.foregroundSessionState.markBusy("session-1", "D:\\Projects\\Repo");
-    startInteractionForTest(deps.interactionManager, {
+    startGuardInteraction( {
       kind: "permission",
       expectedInput: "callback",
     });
@@ -413,7 +423,7 @@ describe("interaction guard", () => {
 
   it("does not allow rename callback to bypass busy state", () => {
     deps.foregroundSessionState.markBusy("session-1", "D:\\Projects\\Repo");
-    startInteractionForTest(deps.interactionManager, {
+    startGuardInteraction( {
       kind: "rename",
       expectedInput: "text",
     });

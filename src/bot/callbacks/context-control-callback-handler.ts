@@ -12,6 +12,7 @@ import {
   ensureActiveInlineMenu,
   type InlineMenuDeps,
 } from "../menus/inline-menu.js";
+import { getInteractionScope } from "../middleware/interaction-scope.js";
 import { buildCompactConfirmationMenu } from "../menus/context-control-menu.js";
 
 export async function handleCompactDetails(ctx: Context, deps: InlineMenuDeps): Promise<boolean> {
@@ -23,14 +24,14 @@ export async function handleCompactDetails(ctx: Context, deps: InlineMenuDeps): 
     return true;
   }
 
-  if (deps.interactionManager.getSnapshot()?.metadata.stage !== "details") {
+  if (deps.interactionManager.getSnapshot(getInteractionScope(ctx))?.metadata.stage !== "details") {
     await alert(ctx, "inline.inactive_callback");
     return true;
   }
 
   const session = getCurrentSession();
   if (!session) {
-    clearActiveInlineMenu("context_session_missing", deps);
+    clearActiveInlineMenu("context_session_missing", ctx, deps);
     await alert(ctx, "context.no_active_session");
     await ctx.deleteMessage().catch(() => {});
     return true;
@@ -41,9 +42,15 @@ export async function handleCompactDetails(ctx: Context, deps: InlineMenuDeps): 
   await ctx.editMessageText(t("context.confirm_text", { title }), {
     reply_markup: appendInlineMenuCancelButton(buildCompactConfirmationMenu(), "context"),
   });
-  deps.interactionManager.transition({
-    metadata: { ...deps.interactionManager.getSnapshot()?.metadata, stage: "confirm" },
-  });
+  deps.interactionManager.transition(
+    {
+      metadata: {
+        ...deps.interactionManager.getSnapshot(getInteractionScope(ctx))?.metadata,
+        stage: "confirm",
+      },
+    },
+    getInteractionScope(ctx),
+  );
   return true;
 }
 
@@ -67,7 +74,7 @@ export async function handleCompactConfirm(
     return true;
   }
 
-  if (deps.interactionManager.getSnapshot()?.metadata.stage !== "confirm") {
+  if (deps.interactionManager.getSnapshot(getInteractionScope(ctx))?.metadata.stage !== "confirm") {
     await alert(ctx, "inline.inactive_callback");
     return true;
   }
@@ -78,7 +85,7 @@ export async function handleCompactConfirm(
     const session = getCurrentSession();
 
     if (!session) {
-      clearActiveInlineMenu("context_session_missing", deps);
+      clearActiveInlineMenu("context_session_missing", ctx, deps);
       await alert(ctx, "context.no_active_session");
       await ctx.deleteMessage().catch(() => {});
       return true;
@@ -86,7 +93,7 @@ export async function handleCompactConfirm(
 
     // Answer callback query and delete menu immediately
     await ctx.answerCallbackQuery({ text: t("context.callback_compacting") });
-    clearActiveInlineMenu("context_compact_confirmed", deps);
+    clearActiveInlineMenu("context_compact_confirmed", ctx, deps);
     await ctx.deleteMessage().catch(() => {});
 
     // Send progress message
@@ -126,7 +133,7 @@ export async function handleCompactConfirm(
 
     return true;
   } catch (err) {
-    clearActiveInlineMenu("context_compact_error", deps);
+    clearActiveInlineMenu("context_compact_error", ctx, deps);
     logger.error("[ContextHandler] Compact exception:", err);
     await failure(ctx, "context.error");
     await ctx.deleteMessage().catch(() => {});

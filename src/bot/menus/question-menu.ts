@@ -16,6 +16,7 @@ import type {
 } from "../../app/types/question.js";
 import { isOpencodeNotFoundError } from "../../utils/opencode-error.js";
 import { isRecord } from "../../utils/type-guards.js";
+import { DEFAULT_INTERACTION_SCOPE } from "../../app/types/interaction-scope.js";
 
 const MAX_BUTTON_LENGTH = 60;
 const TELEGRAM_MESSAGE_LIMIT = 4096;
@@ -55,10 +56,13 @@ export function isQuestionRequestGone(error: unknown): boolean {
   );
 }
 
-function getProgress(deps: QuestionDataDeps): QuestionProgress {
+function getProgress(
+  deps: QuestionDataDeps,
+  scope: string = DEFAULT_INTERACTION_SCOPE,
+): QuestionProgress {
   return {
-    index: deps.questionManager.getCurrentIndex(),
-    total: deps.questionManager.getTotalQuestions(),
+    index: deps.questionManager.getCurrentIndex(scope),
+    total: deps.questionManager.getTotalQuestions(scope),
   };
 }
 
@@ -72,10 +76,14 @@ function getCallbackMessageId(ctx: Context): number | null {
   return typeof messageId === "number" ? messageId : null;
 }
 
-export function clearQuestionInteraction(reason: string, deps: QuestionInteractionDeps): void {
-  const state = deps.interactionManager.getSnapshot();
+export function clearQuestionInteraction(
+  reason: string,
+  deps: QuestionInteractionDeps,
+  scope: string = DEFAULT_INTERACTION_SCOPE,
+): void {
+  const state = deps.interactionManager.getSnapshot(scope);
   if (state?.kind === "question") {
-    deps.interactionManager.clear(reason);
+    deps.interactionManager.clear(reason, scope);
   }
 }
 
@@ -84,13 +92,14 @@ export function syncQuestionInteractionState(
   questionIndex: number,
   messageId: number | null,
   deps: QuestionStateDeps,
+  scope: string = DEFAULT_INTERACTION_SCOPE,
 ): void {
   const metadata: Record<string, unknown> = {
     questionIndex,
     inputMode: expectedInput === "mixed" ? "custom" : "options",
   };
 
-  const requestID = deps.questionManager.getRequestID();
+  const requestID = deps.questionManager.getRequestID(scope);
   if (requestID) {
     metadata.requestID = requestID;
   }
@@ -100,32 +109,37 @@ export function syncQuestionInteractionState(
   }
 
   // The slot is opened by questionManager.startQuestions; only refine it here.
-  if (deps.interactionManager.getSnapshot()?.kind !== "question") {
+  if (deps.interactionManager.getSnapshot(scope)?.kind !== "question") {
     return;
   }
 
-  deps.interactionManager.transition({
-    expectedInput,
-    metadata,
-  });
+  deps.interactionManager.transition(
+    {
+      expectedInput,
+      metadata,
+    },
+    scope,
+  );
 }
 
 export async function updateQuestionMessage(
   ctx: Context,
   deps: QuestionDataDeps,
+  scope: string = DEFAULT_INTERACTION_SCOPE,
 ): Promise<void> {
   const { questionManager } = deps;
-  const question = questionManager.getCurrentQuestion();
+  const question = questionManager.getCurrentQuestion(scope);
   if (!question) {
     logger.debug("[QuestionHandler] updateQuestionMessage: no current question");
     return;
   }
 
-  const part = formatQuestionDetailsPart(question, getProgress(deps));
+  const part = formatQuestionDetailsPart(question, getProgress(deps, scope));
   const keyboard = buildQuestionKeyboard(
     question,
-    questionManager.getSelectedOptions(questionManager.getCurrentIndex()),
+    questionManager.getSelectedOptions(questionManager.getCurrentIndex(scope), scope),
     deps,
+    scope,
   );
 
   logger.debug("[QuestionHandler] Updating question message");
@@ -159,30 +173,32 @@ export async function showCurrentQuestion(
   bot: Context["api"],
   chatId: number,
   deps: QuestionMenuDeps,
+  scope: string = DEFAULT_INTERACTION_SCOPE,
 ): Promise<void> {
   const { questionManager, summaryAggregator } = deps;
-  const question = questionManager.getCurrentQuestion();
+  const question = questionManager.getCurrentQuestion(scope);
 
   if (!question) {
-    await submitPollAnswers(bot, chatId, deps);
+    await submitPollAnswers(bot, chatId, deps, scope);
     return;
   }
 
   logger.debug(`[QuestionHandler] Showing question: ${question.header} - ${question.question}`);
 
-  const part = formatQuestionDetailsPart(question, getProgress(deps));
+  const part = formatQuestionDetailsPart(question, getProgress(deps, scope));
   const keyboard = buildQuestionKeyboard(
     question,
-    questionManager.getSelectedOptions(questionManager.getCurrentIndex()),
+    questionManager.getSelectedOptions(questionManager.getCurrentIndex(scope), scope),
     deps,
+    scope,
   );
 
   logger.debug(`[QuestionHandler] Sending message with keyboard, chatId=${chatId}`);
 
   // Until the message lands, a settle, reset or run end of this question is recorded for it.
-  const requestID = questionManager.getRequestID();
-  const sessionId = questionManager.getSessionId();
-  const progress = getProgress(deps);
+  const requestID = questionManager.getRequestID(scope);
+  const sessionId = questionManager.getSessionId(scope);
+  const progress = getProgress(deps, scope);
   if (requestID && sessionId) {
     questionManager.trackInFlight(requestID, sessionId);
   }
@@ -200,28 +216,29 @@ export async function showCurrentQuestion(
     if (requestID) {
       const ending = questionManager.getInFlightEnding(requestID);
       questionManager.untrackInFlight(requestID);
-      const holdsSlot = questionManager.getRequestID() === requestID;
+      const holdsSlot = questionManager.getRequestID(scope) === requestID;
       if (ending || !holdsSlot) {
         await endLandedPoll(bot, chatId, messageId, question, progress, ending ?? "not_answered");
         if (holdsSlot) {
           // A run end leaves the slot to the poll: release it so waiting requests move on.
-          clearQuestionInteraction("question_not_answered", deps);
-          questionManager.clear();
+          clearQuestionInteraction("question_not_answered", deps, scope);
+          questionManager.clear(scope);
         }
         return;
       }
     }
 
-    questionManager.addMessageId(messageId);
+    questionManager.addMessageId(messageId, scope);
 
     logger.debug(`[QuestionHandler] Message sent, messageId=${messageId}`);
 
-    questionManager.setActiveMessageId(messageId);
+    questionManager.setActiveMessageId(messageId, scope);
     syncQuestionInteractionState(
       "callback",
-      questionManager.getCurrentIndex(),
-      questionManager.getActiveMessageId(),
+      questionManager.getCurrentIndex(scope),
+      questionManager.getActiveMessageId(scope),
       deps,
+      scope,
     );
 
     summaryAggregator.stopTypingIndicator();
@@ -229,22 +246,26 @@ export async function showCurrentQuestion(
     if (requestID) {
       questionManager.untrackInFlight(requestID);
     }
-    questionManager.clear();
-    clearQuestionInteraction("question_message_send_failed", deps);
+    questionManager.clear(scope);
+    clearQuestionInteraction("question_message_send_failed", deps, scope);
 
     logger.error("[QuestionHandler] Failed to send question message:", err);
     throw err;
   }
 }
 
-export async function showNextQuestion(ctx: Context, deps: QuestionMenuDeps): Promise<void> {
-  deps.questionManager.nextQuestion();
+export async function showNextQuestion(
+  ctx: Context,
+  deps: QuestionMenuDeps,
+  scope: string = DEFAULT_INTERACTION_SCOPE,
+): Promise<void> {
+  deps.questionManager.nextQuestion(scope);
 
   if (!ctx.chat) {
     return;
   }
 
-  await showCurrentQuestion(ctx.api, ctx.chat.id, deps);
+  await showCurrentQuestion(ctx.api, ctx.chat.id, deps, scope);
 }
 
 /**
@@ -292,8 +313,7 @@ export async function closeDroppedPoll(
   bot: Context["api"],
   chatId: number,
   state: QuestionState,
-): Promise<void> {
-  const question = state.questions[state.currentIndex];
+): Promise<void> {  const question = state.questions[state.currentIndex];
   if (!question || state.activeMessageId === null) {
     return;
   }
@@ -321,30 +341,32 @@ export async function submitPollAnswers(
   bot: Context["api"],
   chatId: number,
   deps: QuestionMenuDeps,
+  scope: string = DEFAULT_INTERACTION_SCOPE,
 ): Promise<void> {
   const { questionManager } = deps;
-  const requestID = questionManager.getRequestID();
+  const requestID = questionManager.getRequestID(scope);
   const directory = getCurrentSession()?.directory ?? getCurrentProject()?.worktree;
 
-  questionManager.startAnswer();
+  questionManager.startAnswer(scope);
   syncQuestionInteractionState(
     "callback",
-    questionManager.getCurrentIndex(),
-    questionManager.getActiveMessageId(),
+    questionManager.getCurrentIndex(scope),
+    questionManager.getActiveMessageId(scope),
     deps,
+    scope,
   );
 
   if (!requestID || !directory) {
     // Nothing can be sent: the poll stays answerable and says the answer did not get through.
     logger.error("[QuestionHandler] No requestID or project for sending answers");
-    await finishPollAnswers(bot, chatId, deps, requestID ?? "", "failed");
+    await finishPollAnswers(bot, chatId, deps, requestID ?? "", "failed", scope);
     return;
   }
 
-  const totalQuestions = questionManager.getTotalQuestions();
+  const totalQuestions = questionManager.getTotalQuestions(scope);
   const allAnswers: string[][] = [];
   for (let i = 0; i < totalQuestions; i++) {
-    allAnswers.push(questionManager.getReplyItems(i));
+    allAnswers.push(questionManager.getReplyItems(i, scope));
   }
 
   logger.info(
@@ -376,8 +398,8 @@ export async function submitPollAnswers(
       );
       return "failed";
     },
-    onSuccess: (result) => finishPollAnswers(bot, chatId, deps, requestID, result),
-    onError: () => finishPollAnswers(bot, chatId, deps, requestID, "failed"),
+    onSuccess: (result) => finishPollAnswers(bot, chatId, deps, requestID, result, scope),
+    onError: () => finishPollAnswers(bot, chatId, deps, requestID, "failed", scope),
   });
 }
 
@@ -391,26 +413,27 @@ async function finishPollAnswers(
   deps: QuestionMenuDeps,
   requestID: string,
   result: QuestionReplyResult,
+  scope: string,
 ): Promise<void> {
   const { questionManager } = deps;
-  if (!questionManager.isAnswering() || questionManager.getRequestID() !== requestID) {
+  if (!questionManager.isAnswering(scope) || questionManager.getRequestID(scope) !== requestID) {
     logger.info(`[QuestionHandler] Answers finished for a poll already closed: ${requestID}`);
     return;
   }
 
-  const settled = questionManager.getSettledWhileSending();
+  const settled = questionManager.getSettledWhileSending(scope);
   logger.info(
     `[QuestionHandler] Answers finished: requestID=${requestID}, result=${result}, settled=${settled ?? "none"}`,
   );
 
   if (result === "accepted" || (result === "failed" && settled === "answered")) {
     // A lost reply still counts when OpenCode reported the question answered.
-    await completePoll(bot, chatId, deps);
+    await completePoll(bot, chatId, deps, scope);
   } else if (result === "gone" || settled === "cancelled") {
-    await closeQuestionSettledOutside(bot, chatId, settled ?? "answered", deps);
+    await closeQuestionSettledOutside(bot, chatId, settled ?? "answered", deps, scope);
   } else {
-    questionManager.failAnswer();
-    await showQuestionDeliveryWarning(bot, chatId, deps);
+    questionManager.failAnswer(scope);
+    await showQuestionDeliveryWarning(bot, chatId, deps, scope);
   }
 }
 
@@ -419,12 +442,13 @@ async function completePoll(
   bot: Context["api"],
   chatId: number,
   deps: QuestionStateDeps,
+  scope: string,
 ): Promise<void> {
   const { questionManager } = deps;
-  const answers = questionManager.getAllAnswers();
-  const totalQuestions = questionManager.getTotalQuestions();
-  const messageId = questionManager.getActiveMessageId();
-  const requestID = questionManager.getRequestID();
+  const answers = questionManager.getAllAnswers(scope);
+  const totalQuestions = questionManager.getTotalQuestions(scope);
+  const messageId = questionManager.getActiveMessageId(scope);
+  const requestID = questionManager.getRequestID(scope);
 
   logger.info(
     `[QuestionHandler] Poll completed: ${answers.length}/${totalQuestions} questions answered`,
@@ -443,9 +467,9 @@ async function completePoll(
     }
   } finally {
     // A reset during the send may have let a newer poll into the slot: leave that one alone.
-    if (questionManager.getRequestID() === requestID) {
-      clearQuestionInteraction("question_completed", deps);
-      questionManager.clear();
+    if (questionManager.getRequestID(scope) === requestID) {
+      clearQuestionInteraction("question_completed", deps, scope);
+      questionManager.clear(scope);
     }
   }
 }
@@ -460,9 +484,10 @@ export async function closeQuestionSettledOutside(
   chatId: number,
   outcome: QuestionSettledOutcome,
   deps: QuestionStateDeps,
+  scope: string = DEFAULT_INTERACTION_SCOPE,
 ): Promise<void> {
   logger.info(
-    `[QuestionHandler] Poll settled outside Telegram: requestID=${deps.questionManager.getRequestID()}, outcome=${outcome}`,
+    `[QuestionHandler] Poll settled outside Telegram: requestID=${deps.questionManager.getRequestID(scope)}, outcome=${outcome}`,
   );
   await closeQuestionWithLine(
     bot,
@@ -474,6 +499,7 @@ export async function closeQuestionSettledOutside(
     ),
     "question_settled_outside",
     deps,
+    scope,
   );
 }
 
@@ -485,9 +511,10 @@ export async function closeQuestionNotAnswered(
   bot: Context["api"],
   chatId: number,
   deps: QuestionStateDeps,
+  scope: string = DEFAULT_INTERACTION_SCOPE,
 ): Promise<void> {
   logger.info(
-    `[QuestionHandler] Poll lost with the OpenCode server: requestID=${deps.questionManager.getRequestID()}`,
+    `[QuestionHandler] Poll lost with the OpenCode server: requestID=${deps.questionManager.getRequestID(scope)}`,
   );
   await closeQuestionWithLine(
     bot,
@@ -495,6 +522,7 @@ export async function closeQuestionNotAnswered(
     t("question.not_answered"),
     "question_not_answered",
     deps,
+    scope,
   );
 }
 
@@ -504,16 +532,19 @@ async function closeQuestionWithLine(
   line: string,
   reason: "question_settled_outside" | "question_not_answered",
   deps: QuestionStateDeps,
+  scope: string,
 ): Promise<void> {
   const { questionManager } = deps;
-  const question = questionManager.getCurrentQuestion();
-  const messageId = questionManager.getActiveMessageId();
-  const part = question ? formatQuestionDetailsPart(question, getProgress(deps), line) : null;
+  const question = questionManager.getCurrentQuestion(scope);
+  const messageId = questionManager.getActiveMessageId(scope);
+  const part = question
+    ? formatQuestionDetailsPart(question, getProgress(deps, scope), line)
+    : null;
 
   // Release the poll before the edit: the question tool's error, which follows a dismissal,
   // must not find it active and delete it.
-  clearQuestionInteraction(reason, deps);
-  questionManager.clear();
+  clearQuestionInteraction(reason, deps, scope);
+  questionManager.clear(scope);
 
   if (part && messageId !== null) {
     await editRenderedBotPart({ api: bot, chatId, messageId, part }).catch((err) => {
@@ -530,12 +561,13 @@ export async function closeQuestionCancelled(
   bot: Context["api"],
   chatId: number,
   deps: QuestionStateDeps,
+  scope: string = DEFAULT_INTERACTION_SCOPE,
 ): Promise<void> {
   const { questionManager } = deps;
-  const messageId = questionManager.getActiveMessageId();
+  const messageId = questionManager.getActiveMessageId(scope);
 
   // Released before the edit, like a poll settled outside Telegram.
-  questionManager.cancel();
+  questionManager.cancel(scope);
 
   if (messageId !== null) {
     await bot.editMessageText(chatId, messageId, t("question.cancelled")).catch((err) => {
@@ -552,10 +584,11 @@ export async function showQuestionDeliveryWarning(
   bot: Context["api"],
   chatId: number,
   deps: QuestionDataDeps,
+  scope: string = DEFAULT_INTERACTION_SCOPE,
 ): Promise<void> {
   const { questionManager } = deps;
-  const question = questionManager.getCurrentQuestion();
-  const messageId = questionManager.getActiveMessageId();
+  const question = questionManager.getCurrentQuestion(scope);
+  const messageId = questionManager.getActiveMessageId(scope);
   if (!question || messageId === null) {
     return;
   }
@@ -564,12 +597,17 @@ export async function showQuestionDeliveryWarning(
     api: bot,
     chatId,
     messageId,
-    part: formatQuestionDetailsPart(question, getProgress(deps), t("permission.delivery_failed")),
+    part: formatQuestionDetailsPart(
+      question,
+      getProgress(deps, scope),
+      t("permission.delivery_failed"),
+    ),
     options: {
       reply_markup: buildQuestionKeyboard(
         question,
-        questionManager.getSelectedOptions(questionManager.getCurrentIndex()),
+        questionManager.getSelectedOptions(questionManager.getCurrentIndex(scope), scope),
         deps,
+        scope,
       ),
     },
   }).catch((err) => {
@@ -731,10 +769,11 @@ function buildQuestionKeyboard(
   },
   selectedOptions: Set<number>,
   deps: QuestionDataDeps,
+  scope: string = DEFAULT_INTERACTION_SCOPE,
 ): InlineKeyboard {
   const keyboard = new InlineKeyboard();
 
-  const questionIndex = deps.questionManager.getCurrentIndex();
+  const questionIndex = deps.questionManager.getCurrentIndex(scope);
 
   logger.debug(`[QuestionHandler] Building keyboard for question ${questionIndex}`);
 
@@ -749,9 +788,9 @@ function buildQuestionKeyboard(
     keyboard.text(buttonText, callbackData).row();
   });
 
-  const customAnswer = deps.questionManager.getCustomAnswer(questionIndex);
+  const customAnswer = deps.questionManager.getCustomAnswer(questionIndex, scope);
   if (question.multiple && customAnswer) {
-    const icon = deps.questionManager.isCustomAnswerSelected(questionIndex) ? "✅ " : "";
+    const icon = deps.questionManager.isCustomAnswerSelected(questionIndex, scope) ? "✅ " : "";
     const label = `${CUSTOM_ANSWER_EMOJI} ${customAnswer.replace(/\s*\n\s*/g, " ")}`;
     keyboard.text(formatButtonText(label, icon), `question:toggle_custom:${questionIndex}`).row();
     logger.debug(`[QuestionHandler] Added custom answer row`);

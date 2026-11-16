@@ -89,9 +89,12 @@ beforeEach(() => {
   container = createTestAppContainer();
 });
 
+/** The scope every context in this file resolves to: chat 777 with no forum topic. */
+const SCOPE = "777:no-thread";
+
 describe("bot/commands/tasklist", () => {
   beforeEach(() => {
-    container.interactionManager.clear("test_setup");
+    container.interactionManager.clear("test_setup", SCOPE);
     mocked.listScheduledTasksMock.mockReset();
     mocked.getScheduledTaskMock.mockReset();
     mocked.removeScheduledTaskMock.mockReset();
@@ -108,7 +111,7 @@ describe("bot/commands/tasklist", () => {
     await taskListCommand(ctx as never, createDeps());
 
     expect(ctx.reply).toHaveBeenCalledWith(t("tasklist.empty"));
-    expect(container.interactionManager.getSnapshot()).toBeNull();
+    expect(container.interactionManager.getSnapshot(SCOPE)).toBeNull();
   });
 
   it("shows tasks from all projects in one list", async () => {
@@ -144,7 +147,7 @@ describe("bot/commands/tasklist", () => {
     expect(options.reply_markup.inline_keyboard[1]?.[0]?.text).toContain("Check weather forecast");
     expect(options.reply_markup.inline_keyboard[2]?.[0]?.callback_data).toBe("tasklist:cancel");
 
-    expect(container.interactionManager.getSnapshot()).toMatchObject({
+    expect(container.interactionManager.getSnapshot(SCOPE)).toMatchObject({
       kind: "custom",
       expectedInput: "callback",
       metadata: {
@@ -189,7 +192,7 @@ describe("bot/commands/tasklist", () => {
         stage: "list",
         messageId: 300,
       },
-    });
+    }, SCOPE);
 
     mocked.getScheduledTaskMock.mockReturnValue(
       createTask("task-1", {
@@ -222,7 +225,7 @@ describe("bot/commands/tasklist", () => {
     expect(text.indexOf("🛠️ Build")).toBeLessThan(text.indexOf("Model: openai/gpt-5 (default)"));
     expect(text.indexOf("Model: openai/gpt-5 (default)")).toBeLessThan(text.indexOf("Every hour"));
 
-    expect(container.interactionManager.getSnapshot()).toMatchObject({
+    expect(container.interactionManager.getSnapshot(SCOPE)).toMatchObject({
       kind: "custom",
       metadata: {
         flow: "tasklist",
@@ -237,7 +240,7 @@ describe("bot/commands/tasklist", () => {
       kind: "custom",
       expectedInput: "callback",
       metadata: { flow: "tasklist", stage: "detail", messageId: 300, taskId: "task-1" },
-    });
+    }, SCOPE);
     mocked.toggleScheduledTaskMock.mockResolvedValue(
       createTask("task-1", { enabled: false, nextRunAt: null }),
     );
@@ -256,7 +259,7 @@ describe("bot/commands/tasklist", () => {
       kind: "custom",
       expectedInput: "callback",
       metadata: { flow: "tasklist", stage: "detail", messageId: 300, taskId: "task-1" },
-    });
+    }, SCOPE);
     mocked.toggleScheduledTaskMock.mockRejectedValue(new Error("disk error"));
     const ctx = createCallbackContext("tasklist:toggle:off:task-1", 300);
     await handleTaskListCallback(ctx, createDeps());
@@ -270,7 +273,7 @@ describe("bot/commands/tasklist", () => {
       kind: "custom",
       expectedInput: "callback",
       metadata: { flow: "tasklist", stage: "detail", messageId: 300, taskId: "task-1" },
-    });
+    }, SCOPE);
     mocked.toggleScheduledTaskMock.mockResolvedValue(null);
     mocked.getScheduledTaskMock.mockReturnValue(createTask("task-1", { enabled: false }));
     const ctx = createCallbackContext("tasklist:toggle:off:task-1", 300);
@@ -280,7 +283,7 @@ describe("bot/commands/tasklist", () => {
       show_alert: true,
     });
     expect(ctx.deleteMessage).not.toHaveBeenCalled();
-    expect(container.interactionManager.getSnapshot()).toMatchObject({
+    expect(container.interactionManager.getSnapshot(SCOPE)).toMatchObject({
       metadata: { stage: "detail", taskId: "task-1" },
     });
   });
@@ -295,13 +298,13 @@ describe("bot/commands/tasklist", () => {
         messageId: 400,
         taskId: "task-1",
       },
-    });
+    }, SCOPE);
 
     const ctx = createCallbackContext("tasklist:cancel", 400);
     const handled = await handleTaskListCallback(ctx, createDeps());
 
     expect(handled).toBe(true);
-    expect(container.interactionManager.getSnapshot()).toBeNull();
+    expect(container.interactionManager.getSnapshot(SCOPE)).toBeNull();
     expect(ctx.answerCallbackQuery).toHaveBeenCalledWith({
       text: t("common.cancelled"),
     });
@@ -318,7 +321,7 @@ describe("bot/commands/tasklist", () => {
         messageId: 500,
         taskId: "task-2",
       },
-    });
+    }, SCOPE);
 
     const ctx = createCallbackContext("tasklist:delete:task-2", 500);
     const handled = await handleTaskListCallback(ctx, createDeps());
@@ -326,7 +329,7 @@ describe("bot/commands/tasklist", () => {
     expect(handled).toBe(true);
     expect(mocked.removeScheduledTaskMock).toHaveBeenCalledWith("task-2");
     expect(mocked.runtimeRemoveTaskMock).toHaveBeenCalledWith("task-2");
-    expect(container.interactionManager.getSnapshot()).toBeNull();
+    expect(container.interactionManager.getSnapshot(SCOPE)).toBeNull();
     expect(ctx.answerCallbackQuery).toHaveBeenCalledWith({
       text: t("tasklist.deleted_callback"),
     });
@@ -342,7 +345,7 @@ describe("bot/commands/tasklist", () => {
         stage: "list",
         messageId: 600,
       },
-    });
+    }, SCOPE);
 
     const ctx = createCallbackContext("tasklist:open:task-1", 601);
     const handled = await handleTaskListCallback(ctx, createDeps());
@@ -363,7 +366,7 @@ describe("bot/commands/tasklist", () => {
         stage: "list",
         messageId: 700,
       },
-    });
+    }, SCOPE);
 
     const longPrompt = "A".repeat(4000);
     mocked.getScheduledTaskMock.mockReturnValue(
@@ -391,7 +394,7 @@ describe("bot/commands/tasklist", () => {
         stage: "list",
         messageId: 800,
       },
-    });
+    }, SCOPE);
 
     const shortPrompt = "Check weather";
     mocked.getScheduledTaskMock.mockReturnValue(
@@ -419,7 +422,7 @@ describe("bot/commands/tasklist", () => {
         stage: "list",
         messageId: 900,
       },
-    });
+    }, SCOPE);
 
     // Arabic chars are ~2 bytes each in UTF-8 — 2500 chars = ~5000 bytes
     const arabicPrompt = "مرحباً".repeat(500);

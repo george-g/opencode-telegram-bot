@@ -5,6 +5,7 @@ import { formatSessionTitle } from "../../app/formatters/session-title-formatter
 import { logger } from "../../utils/logger.js";
 import { t } from "../../i18n/index.js";
 import { buildRenameCancelKeyboard } from "../menus/rename-menu.js";
+import { getInteractionScope } from "../middleware/interaction-scope.js";
 
 export type RenameCommandDeps = Pick<AppContainer, "interactionManager" | "renameManager">;
 
@@ -26,15 +27,24 @@ export async function renameCommand(
       { reply_markup: buildRenameCancelKeyboard() },
     );
 
-    deps.renameManager.startWaiting(currentSession.id, currentSession.directory, currentTitle);
-    deps.renameManager.setMessageId(message.message_id);
-    deps.interactionManager.transition({
-      expectedInput: "text",
-      metadata: {
-        sessionId: currentSession.id,
-        messageId: message.message_id,
+    const scope = getInteractionScope(ctx);
+    deps.renameManager.startWaiting(
+      currentSession.id,
+      currentSession.directory,
+      currentTitle,
+      scope,
+    );
+    deps.renameManager.setMessageId(message.message_id, scope);
+    deps.interactionManager.transition(
+      {
+        expectedInput: "text",
+        metadata: {
+          sessionId: currentSession.id,
+          messageId: message.message_id,
+        },
       },
-    });
+      scope,
+    );
 
     logger.info(`[RenameCommand] Waiting for new title for session: ${currentSession.id}`);
   } catch (error) {

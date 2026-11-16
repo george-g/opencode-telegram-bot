@@ -11,6 +11,7 @@ import type {
 import { GOAL_BUTTON_TEXT_PATTERN, QUEUED_PROMPT_BUTTON_TEXT_PATTERN } from "../message-patterns.js";
 import type { LocalCommandRegistry } from "../../app/services/local-command-registry.js";
 import { isKnownCommand } from "../routers/command-utils.js";
+import { getInteractionScope } from "./interaction-scope.js";
 
 export type InteractionGuardDecisionDeps = Pick<
   AppContainer,
@@ -167,8 +168,12 @@ export function resolveInteractionGuardDecision(
   localCommandRegistry?: LocalCommandRegistry,
 ): GuardDecision {
   const { attachManager, foregroundSessionState, interactionManager } = deps;
-  const state = interactionManager.getSnapshot();
+  const scope = getInteractionScope(ctx);
+  const state = interactionManager.getSnapshot(scope);
   const { inputType, command } = classifyIncomingInput(ctx);
+  // Known limitation: the busy gate below is process-wide. One running session
+  // blocks input in every scope, not only in its own scope. Scoping the gate
+  // needs per-session run state, so this fix leaves it as is.
   const isBusy = foregroundSessionState.isBusy() || attachManager.isBusy();
 
   const goalLabel = typeof ctx.message?.text === "string" && GOAL_BUTTON_TEXT_PATTERN.test(ctx.message.text);
@@ -185,8 +190,8 @@ export function resolveInteractionGuardDecision(
     return createAllowDecision(inputType, state, command, isBusy);
   }
 
-  if (state && interactionManager.isExpired()) {
-    interactionManager.clear("expired");
+  if (state && interactionManager.isExpired(Date.now(), scope)) {
+    interactionManager.clear("expired", scope);
     return createBlockDecision(inputType, state, "expired", command, isBusy);
   }
 

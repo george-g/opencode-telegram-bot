@@ -3,6 +3,9 @@ import { logger } from "../../../utils/logger.js";
 import type { PermissionRequest } from "../../../app/types/permission.js";
 import type { Question } from "../../../app/types/question.js";
 import {
+  interactionScopeFromDestination,
+} from "../../../app/types/interaction-scope.js";
+import {
   closeDroppedPoll,
   closeQuestionCancelled,
   closeQuestionSettledOutside,
@@ -46,7 +49,8 @@ async function presentQuestion(
   generation: number | null,
 ): Promise<void> {
   const { questionManager } = deps;
-  if (!deps.policy.getDestination(sessionId)) {
+  const destination = deps.policy.getDestination(sessionId);
+  if (!destination) {
     logger.error("Bot or chat ID not available for showing questions");
     return;
   }
@@ -55,11 +59,13 @@ async function presentQuestion(
     return;
   }
 
+  const scope = interactionScopeFromDestination(destination);
+
   // While the messages before the poll go out, a settle, reset or run end of its question
   // is recorded for it, so the poll is not shown for a question that is gone.
   questionManager.trackInFlight(requestID, sessionId);
   try {
-    await showOrQueueQuestion(deps, questions, requestID, sessionId, generation);
+    await showOrQueueQuestion(deps, questions, requestID, sessionId, generation, scope);
   } finally {
     questionManager.untrackInFlight(requestID);
   }
@@ -71,6 +77,7 @@ async function showOrQueueQuestion(
   requestID: string,
   sessionId: string,
   generation: number | null,
+  scope: string,
 ): Promise<void> {
   const { runtime, policy, interactionManager, questionManager } = deps;
   const destination = policy.getDestination(sessionId);
@@ -89,8 +96,8 @@ async function showOrQueueQuestion(
   await runtime.letOutReplies(followedSessionId);
 
   // Decide and open the slot in one synchronous step: a permission or a
-  // reset may have landed during the flushes.
-  if (generation !== null && generation !== interactionManager.getGeneration()) {
+  // reset may have landed during the flushes. The epoch is that of this scope.
+  if (generation !== null && generation !== interactionManager.getGeneration(scope)) {
     logger.info(`[Bot] Dropping waiting poll after a reset: requestID=${requestID}`);
     return;
   }
@@ -105,14 +112,19 @@ async function showOrQueueQuestion(
     return;
   }
 
-  const replacing = questionManager.isActive() && questionManager.getSessionId() === sessionId;
-  const previousMessageIds = replacing ? questionManager.getMessageIds() : [];
-  const previousRequestID = replacing ? questionManager.getRequestID() : null;
-  if (!questionManager.startQuestions(questions, requestID, sessionId)) {
+  const replacing =
+    questionManager.isActive(scope) && questionManager.getSessionId(scope) === sessionId;
+  const previousMessageIds = replacing ? questionManager.getMessageIds(scope) : [];
+  const previousRequestID = replacing ? questionManager.getRequestID(scope) : null;
+  if (!questionManager.startQuestions(questions, requestID, sessionId, scope)) {
     // A released poll that has to wait again keeps its turn at the head of the queue.
-    interactionManager.waitQuestion(questions, requestID, sessionId, {
-      atHead: generation !== null,
-    });
+    interactionManager.waitQuestion(
+      questions,
+      requestID,
+      sessionId,
+      { atHead: generation !== null },
+      scope,
+    );
     return;
   }
 
@@ -137,7 +149,7 @@ async function showOrQueueQuestion(
     `[Bot] Received ${questions.length} questions from agent, requestID=${requestID}, subagent=${followedSessionId !== sessionId}`,
   );
   try {
-    await showCurrentQuestion(destination.api, destination.chatId, deps);
+    await showCurrentQuestion(destination.api, destination.chatId, deps, scope);
   } catch {
     runtime.compactProgressStreamer.releaseHold(followedSessionId);
     return;
@@ -160,7 +172,7 @@ async function showOrQueueQuestion(
 async function presentPermission(
   deps: InteractionDeps,
   request: PermissionRequest,
-  generation: number,
+  generation: number | null,
   released = false,
 ): Promise<void> {
   const { runtime, policy, interactionManager, permissionManager } = deps;
@@ -171,6 +183,9 @@ async function presentPermission(
     return;
   }
 
+  const scope = interactionScopeFromDestination(destination);
+  // A released request carries the epoch of its own scope; a fresh one reads it here.
+  const requestGeneration = generation ?? permissionManager.getGeneration(scope);
   const followedSessionId = getFollowedSessionId(deps, sessionId);
   const isSubagent = followedSessionId !== sessionId;
   if (!policy.isForegroundSession(followedSessionId)) {
@@ -186,13 +201,13 @@ async function presentPermission(
   await runtime.letOutReplies(followedSessionId);
 
   // Decide in one synchronous step: a poll or a reset may have landed during the flushes.
-  if (permissionManager.getDropReason(request, generation)) {
+  if (permissionManager.getDropReason(request, requestGeneration, scope)) {
     logger.debug(`[Bot] Dropping stale or resolved permission request: requestID=${request.id}`);
     return;
   }
 
-  if (interactionManager.getSnapshot()?.kind === "question") {
-    interactionManager.waitPermission(request, { atHead: released });
+  if (interactionManager.getSnapshot(scope)?.kind === "question") {
+    interactionManager.waitPermission(request, { atHead: released }, scope);
     return;
   }
 
@@ -204,16 +219,23 @@ async function presentPermission(
   logger.info(
     `[Bot] Received permission request from agent: type=${request.permission}, requestID=${request.id}, subagent=${isSubagent}`,
   );
-  const messageIdsBefore = new Set(permissionManager.getMessageIds());
+  const messageIdsBefore = new Set(permissionManager.getMessageIds(scope));
   try {
-    await showPermissionRequest(destination.api, destination.chatId, request, deps, generation);
+    await showPermissionRequest(
+      destination.api,
+      destination.chatId,
+      request,
+      deps,
+      requestGeneration,
+      scope,
+    );
   } catch {
     runtime.compactProgressStreamer.releaseHold(followedSessionId);
     return;
   }
 
   const promptLanded = permissionManager
-    .getMessageIds()
+    .getMessageIds(scope)
     .some((messageId) => !messageIdsBefore.has(messageId));
   if (isCompactProgressMode() && promptLanded) {
     await runtime.compactProgressStreamer.finalize(
@@ -230,6 +252,23 @@ export function registerInteractionHandlers(deps: InteractionDeps): void {
   const { policy, interactionManager, permissionManager, questionManager, summaryAggregator } =
     deps;
 
+  /**
+   * The scope of a session's prompts: its bound topic, or the plain chat. A session
+   * with no destination has no scope to queue under, so its request is not queued:
+   * a request under a guess would be removed by an unrelated clear.
+   */
+  const scopeOf = (sessionId: string): string | null => {
+    const destination = policy.getDestination(sessionId);
+    if (!destination) {
+      logger.warn(
+        `[Bot] No destination for the session's interaction, dropping it: session=${sessionId}`,
+      );
+      return null;
+    }
+
+    return interactionScopeFromDestination(destination);
+  };
+
   summaryAggregator.setOnQuestion(async (questions, requestID, sessionId) => {
     await presentQuestion(deps, questions, requestID, sessionId, null);
   });
@@ -237,20 +276,25 @@ export function registerInteractionHandlers(deps: InteractionDeps): void {
   summaryAggregator.setOnQuestionError(async (sessionId) => {
     questionManager.endInFlightForSession(sessionId, "not_answered");
 
-    if (!questionManager.isActive() || questionManager.getSessionId() !== sessionId) {
+    const scope = scopeOf(sessionId);
+    if (
+      scope === null ||
+      !questionManager.isActive(scope) ||
+      questionManager.getSessionId(scope) !== sessionId
+    ) {
       interactionManager.dropWaitingQuestionsForSession(sessionId);
       return;
     }
 
     // A dismissal or answers sent from Telegram fail or end the tool: the poll is left to them.
-    if (questionManager.isSettlingFromTelegram()) {
+    if (questionManager.isSettlingFromTelegram(scope)) {
       return;
     }
 
     logger.info("[Bot] Question tool failed, clearing active poll and deleting messages");
 
-    const messageIds = questionManager.getMessageIds();
-    questionManager.clear();
+    const messageIds = questionManager.getMessageIds(scope);
+    questionManager.clear(scope);
 
     const destination = policy.getDestination(sessionId);
     for (const messageId of messageIds) {
@@ -270,34 +314,39 @@ export function registerInteractionHandlers(deps: InteractionDeps): void {
     // A poll whose message is still on its way ends with this outcome once it lands.
     questionManager.endInFlight(requestID, outcome);
 
-    if (!questionManager.isActive() || questionManager.getRequestID() !== requestID) {
+    const scope = scopeOf(sessionId);
+    if (
+      scope === null ||
+      !questionManager.isActive(scope) ||
+      questionManager.getRequestID(scope) !== requestID
+    ) {
       interactionManager.dropWaitingQuestion(requestID);
       return;
     }
 
     // The answers or the dismissal are on their way: their result decides how the poll ends.
-    if (questionManager.isSettlingFromTelegram()) {
-      questionManager.noteSettledWhileSending(outcome);
+    if (questionManager.isSettlingFromTelegram(scope)) {
+      questionManager.noteSettledWhileSending(outcome, scope);
       return;
     }
 
     const destination = policy.getDestination(sessionId);
     if (!destination) {
-      questionManager.clear();
+      questionManager.clear(scope);
       return;
     }
 
     // The Cancel reported as not delivered did get through after all.
-    if (outcome === "cancelled" && questionManager.hasLastCancelFailed()) {
-      await closeQuestionCancelled(destination.api, destination.chatId, deps);
+    if (outcome === "cancelled" && questionManager.hasLastCancelFailed(scope)) {
+      await closeQuestionCancelled(destination.api, destination.chatId, deps, scope);
       return;
     }
 
-    await closeQuestionSettledOutside(destination.api, destination.chatId, outcome, deps);
+    await closeQuestionSettledOutside(destination.api, destination.chatId, outcome, deps, scope);
   });
 
   summaryAggregator.setOnPermission(async (request) => {
-    await presentPermission(deps, request, permissionManager.getGeneration());
+    await presentPermission(deps, request, null);
   });
 
   interactionManager.setOnWaitingRequestReady(async (request, generation) => {
@@ -342,22 +391,33 @@ export function registerInteractionHandlers(deps: InteractionDeps): void {
     }
 
     logger.info(`[Bot] Ending dropped permission prompts as not answered: count=${changes.length}`);
-    void applyPermissionPromptChanges(destination.api, destination.chatId, changes, deps);
+    void applyPermissionPromptChanges(
+      destination.api,
+      destination.chatId,
+      changes,
+      deps,
+      interactionScopeFromDestination(destination),
+    );
   });
 
   summaryAggregator.setOnPermissionReplied(async (sessionId, requestID, reply) => {
-    const changes = permissionManager.settleRequest(requestID, reply);
+    const scope = scopeOf(sessionId);
+    if (scope === null) {
+      return;
+    }
+
+    const changes = permissionManager.settleRequest(requestID, reply, false, scope);
     if (changes.length === 0) {
       return;
     }
 
     const destination = policy.getDestination(sessionId);
     if (!destination) {
-      syncPermissionInteractionState(deps);
+      syncPermissionInteractionState(deps, {}, scope);
       return;
     }
 
-    await applyPermissionPromptChanges(destination.api, destination.chatId, changes, deps);
+    await applyPermissionPromptChanges(destination.api, destination.chatId, changes, deps, scope);
     logger.info(
       `[Bot] Settled permission prompt: requestID=${requestID}, prompts=${changes.length}`,
     );
@@ -366,20 +426,26 @@ export function registerInteractionHandlers(deps: InteractionDeps): void {
   summaryAggregator.setOnSessionRunEnded(async (sessionId) => {
     interactionManager.dropWaitingQuestionsForSession(sessionId);
     questionManager.endInFlightForSession(sessionId, "not_answered");
-    const changes = permissionManager.endSessionPrompts(sessionId, { kind: "not_answered" });
+
+    const scope = scopeOf(sessionId);
+    if (scope === null) {
+      return;
+    }
+
+    const changes = permissionManager.endSessionPrompts(sessionId, { kind: "not_answered" }, scope);
     if (changes.length === 0) {
       return;
     }
 
     const destination = policy.getDestination(sessionId);
     if (!destination) {
-      syncPermissionInteractionState(deps);
+      syncPermissionInteractionState(deps, {}, scope);
       return;
     }
 
     logger.info(
       `[Bot] Session run ended with permission prompts open: session=${sessionId}, prompts=${changes.length}`,
     );
-    await applyPermissionPromptChanges(destination.api, destination.chatId, changes, deps);
+    await applyPermissionPromptChanges(destination.api, destination.chatId, changes, deps, scope);
   });
 }

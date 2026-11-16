@@ -66,8 +66,11 @@ export interface AppContainer {
 
   /** Drops the open interaction and anything waiting behind it. */
   resetInteractions(reason: string): void;
-  /** Drops only what a failed handler in the given scope may have left behind. */
-  resetInteractionError(scope: InteractionErrorScope, reason: string): void;
+  /**
+   * Drops only what a failed handler in the given scope may have left behind.
+   * `slotScope` names the chat and topic, so no other scope loses its slot.
+   */
+  resetInteractionError(scope: InteractionErrorScope, reason: string, slotScope?: string): void;
   /** Clears the summary aggregator's render state. */
   resetAggregator(): void;
   /** Clears response streams, tool trackers, background tracking and run state. */
@@ -157,7 +160,8 @@ export function createAppContainer(): AppContainer {
     },
 
     resetInteractions: (reason) => interactionManager.reset(reason),
-    resetInteractionError: (scope, reason) => interactionManager.clearErrorScope(scope, reason),
+    resetInteractionError: (scope, reason, slotScope) =>
+      interactionManager.clearErrorScope(scope, reason, slotScope),
     resetAggregator: () => summaryAggregator.clear(),
     resetRuntimeStreams: (reason) => eventSubscriptionService.clearRuntimeState(reason),
     countBackgroundOperations: (sessionId) =>

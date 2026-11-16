@@ -25,6 +25,9 @@ function context(data?: string): Context {
   } as unknown as Context;
 }
 
+/** The scope the picker contexts resolve to: chat 1 with no forum topic. */
+const SCOPE = "1:no-thread";
+
 describe("/recent and picker", () => {
   beforeEach(() => {
     mocked.rows.mockReset(); mocked.get.mockReset();
@@ -39,7 +42,7 @@ describe("/recent and picker", () => {
     const ctx = context();
     await recentCommand(ctx as never, deps);
     expect(ctx.reply).toHaveBeenCalledWith(expect.stringContaining("Recent sessions"), expect.anything());
-    expect(deps.interactionManager.getSnapshot()?.metadata).toMatchObject({ sessionIds: ["first"], directories: ["/other"] });
+    expect(deps.interactionManager.getSnapshot(SCOPE)?.metadata).toMatchObject({ sessionIds: ["first"], directories: ["/other"] });
     const empty = context();
     await recentCommand(empty as never, deps);
     expect(empty.reply).toHaveBeenCalledWith(expect.stringContaining("No sessions"));
@@ -50,7 +53,7 @@ describe("/recent and picker", () => {
     startInteractionForTest(deps.interactionManager, {
       kind: "inline", expectedInput: "callback",
       metadata: { menuKind: "recent", messageId: 20, sessionIds: ["s1"], directories: ["/linked"] },
-    });
+    }, SCOPE);
     mocked.get.mockResolvedValue({ data: { id: "s1", projectID: "project", directory: "/linked", time: { updated: 10 } }, error: null });
     const ctx = context("recent:0");
     expect(await handleRecentSelect(ctx, { ...deps, bot: {} } as never)).toBe(true);
@@ -63,7 +66,7 @@ describe("/recent and picker", () => {
     startInteractionForTest(deps.interactionManager, {
       kind: "inline", expectedInput: "callback",
       metadata: { menuKind: "recent", messageId: 20, sessionIds: ["s1"], directories: ["/gone"] },
-    });
+    }, SCOPE);
     mocked.get.mockResolvedValue({ data: null, error: new Error("gone") });
     const ctx = context("recent:0");
     await handleRecentSelect(ctx, { ...deps, bot: {} } as never);

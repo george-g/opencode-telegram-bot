@@ -8,6 +8,7 @@ import { logger } from "../../utils/logger.js";
 import { isForegroundBusy } from "../../app/services/run-control-service.js";
 import { replyBusyBlocked } from "../messages/busy-blocked-renderer.js";
 import { buildCommandsListKeyboard, formatCommandsSelectText } from "../menus/command-catalog-menu.js";
+import { getInteractionScope } from "../middleware/interaction-scope.js";
 
 export type CommandsCommandDeps = Pick<
   AppContainer,
@@ -42,18 +43,21 @@ export async function commandsCommand(
       reply_markup: keyboard,
     });
 
-    deps.interactionManager.start({
-      kind: "custom",
-      expectedInput: "callback",
-      metadata: {
-        flow: "commands",
-        stage: "list",
-        messageId: message.message_id,
-        projectDirectory: currentProject.worktree,
-        commands,
-        page: 0,
+    deps.interactionManager.start(
+      {
+        kind: "custom",
+        expectedInput: "callback",
+        metadata: {
+          flow: "commands",
+          stage: "list",
+          messageId: message.message_id,
+          projectDirectory: currentProject.worktree,
+          commands,
+          page: 0,
+        },
       },
-    });
+      getInteractionScope(ctx),
+    );
   } catch (error) {
     logger.error("[Commands] Error fetching commands list:", error);
     await ctx.reply(t("commands.fetch_error"));

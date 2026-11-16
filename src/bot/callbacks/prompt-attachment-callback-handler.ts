@@ -3,6 +3,7 @@ import type { AppContainer } from "../../app/bootstrap/app-container.js";
 import { promptAttachment } from "../../app/managers/prompt-attachment-manager.js";
 import { logger } from "../../utils/logger.js";
 import { cancelPrompt } from "./feedback.js";
+import { getInteractionScope } from "../middleware/interaction-scope.js";
 
 export const ATTACHMENT_CANCEL_CALLBACK = "attach:cancel";
 
@@ -17,7 +18,7 @@ export async function handlePromptAttachmentCancel(
   }
 
   promptAttachment.clear("user_cancelled");
-  deps.interactionManager.clear("attachment_cancelled");
+  deps.interactionManager.clear("attachment_cancelled", getInteractionScope(ctx));
 
   await cancelPrompt(ctx, "attachment.cancelled");
 

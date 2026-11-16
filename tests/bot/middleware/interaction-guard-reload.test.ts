@@ -20,6 +20,9 @@ function reloadContext(): Context {
   return { message: { text: "/reload" } } as unknown as Context;
 }
 
+/** The scope the reload context resolves to: no chat named, so chat 0 and no thread. */
+const SCOPE = "0:no-thread";
+
 describe("interaction guard: /reload", () => {
   beforeEach(() => {
     mocked.reloadKnown = true;
@@ -41,7 +44,7 @@ describe("interaction guard: /reload", () => {
     startInteractionForTest(deps.interactionManager, {
       kind: "question",
       expectedInput: "mixed",
-    });
+    }, SCOPE);
 
     const decision = resolveInteractionGuardDecision(reloadContext(), deps);
 
@@ -53,7 +56,7 @@ describe("interaction guard: /reload", () => {
     startInteractionForTest(deps.interactionManager, {
       kind: "inline",
       expectedInput: "callback",
-    });
+    }, SCOPE);
 
     const decision = resolveInteractionGuardDecision(reloadContext(), deps);
 

@@ -7,6 +7,7 @@ import type {
   QuestionInFlightEnding,
 } from "../types/question.js";
 import type { InteractionManager } from "./interaction-manager.js";
+import { DEFAULT_INTERACTION_SCOPE } from "../types/interaction-scope.js";
 import { logger } from "../../utils/logger.js";
 
 function formatOptionLine(option: QuestionOption): string {
@@ -19,25 +20,35 @@ interface InFlightQuestion {
   ending: QuestionInFlightEnding | null;
 }
 
+/**
+ * The question poll of one interaction scope. A poll lives in the slot of its own
+ * chat and topic, so a poll of one topic never blocks, replaces or reads a poll of
+ * another. Every method takes the scope last and defaults to the plain-chat one.
+ */
 export class QuestionManager {
   // Questions whose poll message is still on its way to the chat.
   private readonly inFlight = new Map<string, InFlightQuestion>();
 
   constructor(private readonly interactionManager: InteractionManager) {}
 
-  private get state(): QuestionState | null {
-    return this.interactionManager.getPayload("question");
+  private stateOf(scope: string): QuestionState | null {
+    return this.interactionManager.getPayload("question", scope);
   }
 
   /**
-   * Opens the question slot, replacing a poll of the same session already on screen.
-   * Refuses while permission prompts or another session's poll hold the slot: the
-   * poll has to wait for them.
+   * Opens the question slot of its scope, replacing a poll of the same session
+   * already on screen. Refuses while permission prompts or another session's poll
+   * hold that scope's slot: the poll has to wait for them.
    */
-  startQuestions(questions: Question[], requestID: string, sessionId: string): boolean {
-    const current = this.interactionManager.getSnapshot();
+  startQuestions(
+    questions: Question[],
+    requestID: string,
+    sessionId: string,
+    scope: string = DEFAULT_INTERACTION_SCOPE,
+  ): boolean {
+    const current = this.interactionManager.getSnapshot(scope);
     logger.debug(
-      `[QuestionManager] startQuestions called: slot=${current?.kind ?? "none"}, newQuestions=${questions.length}, requestID=${requestID}`,
+      `[QuestionManager] startQuestions called: scope=${scope}, slot=${current?.kind ?? "none"}, newQuestions=${questions.length}, requestID=${requestID}`,
     );
 
     if (current?.kind === "permission") {
@@ -47,7 +58,7 @@ export class QuestionManager {
       return false;
     }
 
-    const onScreen = this.state;
+    const onScreen = this.stateOf(scope);
     if (onScreen && onScreen.sessionId !== sessionId) {
       logger.info(
         `[QuestionManager] A poll of another session is on screen, not starting poll: requestID=${requestID}`,
@@ -62,43 +73,46 @@ export class QuestionManager {
     logger.info(
       `[QuestionManager] Starting new poll with ${questions.length} questions, requestID=${requestID}`,
     );
-    this.interactionManager.start({
-      kind: "question",
-      expectedInput: "callback",
-      payload: {
-        questions,
-        currentIndex: 0,
-        selectedOptions: new Map(),
-        customAnswers: new Map(),
-        selectedCustomAnswers: new Set(),
-        customInputQuestionIndex: null,
-        activeMessageId: null,
-        messageIds: [],
-        requestID,
-        sessionId,
-        answeredFromTelegram: false,
-        dismissing: false,
-        settledWhileSending: null,
-        lastCancelFailed: false,
+    this.interactionManager.start(
+      {
+        kind: "question",
+        expectedInput: "callback",
+        payload: {
+          questions,
+          currentIndex: 0,
+          selectedOptions: new Map(),
+          customAnswers: new Map(),
+          selectedCustomAnswers: new Set(),
+          customInputQuestionIndex: null,
+          activeMessageId: null,
+          messageIds: [],
+          requestID,
+          sessionId,
+          answeredFromTelegram: false,
+          dismissing: false,
+          settledWhileSending: null,
+          lastCancelFailed: false,
+        },
       },
-    });
+      scope,
+    );
     return true;
   }
 
-  getRequestID(): string | null {
-    return this.state?.requestID ?? null;
+  getRequestID(scope: string = DEFAULT_INTERACTION_SCOPE): string | null {
+    return this.stateOf(scope)?.requestID ?? null;
   }
 
-  getSessionId(): string | null {
-    return this.state?.sessionId ?? null;
+  getSessionId(scope: string = DEFAULT_INTERACTION_SCOPE): string | null {
+    return this.stateOf(scope)?.sessionId ?? null;
   }
 
   /**
    * The poll's answers are being sent from Telegram: OpenCode's own reply event is ours.
    * A custom-text wait ends here, so text typed afterwards is never taken as an answer.
    */
-  startAnswer(): void {
-    const state = this.state;
+  startAnswer(scope: string = DEFAULT_INTERACTION_SCOPE): void {
+    const state = this.stateOf(scope);
     if (state) {
       state.answeredFromTelegram = true;
       state.settledWhileSending = null;
@@ -107,16 +121,16 @@ export class QuestionManager {
     }
   }
 
-  isAnswering(): boolean {
-    return this.state?.answeredFromTelegram ?? false;
+  isAnswering(scope: string = DEFAULT_INTERACTION_SCOPE): boolean {
+    return this.stateOf(scope)?.answeredFromTelegram ?? false;
   }
 
   /**
    * The answers did not reach OpenCode: the poll stays answerable. A custom answer of a
    * single-select question is dropped, so it is typed again after a new Custom answer tap.
    */
-  failAnswer(): void {
-    const state = this.state;
+  failAnswer(scope: string = DEFAULT_INTERACTION_SCOPE): void {
+    const state = this.stateOf(scope);
     if (!state) {
       return;
     }
@@ -132,8 +146,8 @@ export class QuestionManager {
    * Cancel was tapped: the dismissal is being sent to OpenCode. A custom-text wait ends
    * here, so text typed afterwards is never taken as an answer.
    */
-  startDismissal(): void {
-    const state = this.state;
+  startDismissal(scope: string = DEFAULT_INTERACTION_SCOPE): void {
+    const state = this.stateOf(scope);
     if (state) {
       state.dismissing = true;
       state.settledWhileSending = null;
@@ -142,13 +156,13 @@ export class QuestionManager {
     }
   }
 
-  isDismissing(): boolean {
-    return this.state?.dismissing ?? false;
+  isDismissing(scope: string = DEFAULT_INTERACTION_SCOPE): boolean {
+    return this.stateOf(scope)?.dismissing ?? false;
   }
 
   /** The dismissal did not reach OpenCode: the poll stays answerable. */
-  failDismissal(): void {
-    const state = this.state;
+  failDismissal(scope: string = DEFAULT_INTERACTION_SCOPE): void {
+    const state = this.stateOf(scope);
     if (state) {
       state.dismissing = false;
       state.settledWhileSending = null;
@@ -157,8 +171,11 @@ export class QuestionManager {
   }
 
   /** OpenCode reported the question settled while the answers or the dismissal were on their way. */
-  noteSettledWhileSending(outcome: QuestionSettledOutcome): void {
-    const state = this.state;
+  noteSettledWhileSending(
+    outcome: QuestionSettledOutcome,
+    scope: string = DEFAULT_INTERACTION_SCOPE,
+  ): void {
+    const state = this.stateOf(scope);
     if (
       (state?.dismissing || state?.answeredFromTelegram) &&
       state.settledWhileSending !== "answered"
@@ -167,24 +184,24 @@ export class QuestionManager {
     }
   }
 
-  getSettledWhileSending(): QuestionSettledOutcome | null {
-    return this.state?.settledWhileSending ?? null;
+  getSettledWhileSending(scope: string = DEFAULT_INTERACTION_SCOPE): QuestionSettledOutcome | null {
+    return this.stateOf(scope)?.settledWhileSending ?? null;
   }
 
-  hasLastCancelFailed(): boolean {
-    return this.state?.lastCancelFailed ?? false;
+  hasLastCancelFailed(scope: string = DEFAULT_INTERACTION_SCOPE): boolean {
+    return this.stateOf(scope)?.lastCancelFailed ?? false;
   }
 
-  clearLastCancelFailed(): void {
-    const state = this.state;
+  clearLastCancelFailed(scope: string = DEFAULT_INTERACTION_SCOPE): void {
+    const state = this.stateOf(scope);
     if (state) {
       state.lastCancelFailed = false;
     }
   }
 
   /** Answers or a dismissal are being sent from Telegram: the poll is left to that send. */
-  isSettlingFromTelegram(): boolean {
-    const state = this.state;
+  isSettlingFromTelegram(scope: string = DEFAULT_INTERACTION_SCOPE): boolean {
+    const state = this.stateOf(scope);
     return (state?.answeredFromTelegram ?? false) || (state?.dismissing ?? false);
   }
 
@@ -226,13 +243,17 @@ export class QuestionManager {
     return this.inFlight.get(requestID)?.ending ?? null;
   }
 
-  getCurrentQuestion(): Question | null {
-    const state = this.state;
+  getCurrentQuestion(scope: string = DEFAULT_INTERACTION_SCOPE): Question | null {
+    const state = this.stateOf(scope);
     return state?.questions[state.currentIndex] ?? null;
   }
 
-  selectOption(questionIndex: number, optionIndex: number): void {
-    const state = this.state;
+  selectOption(
+    questionIndex: number,
+    optionIndex: number,
+    scope: string = DEFAULT_INTERACTION_SCOPE,
+  ): void {
+    const state = this.stateOf(scope);
     if (!state) {
       return;
     }
@@ -262,12 +283,18 @@ export class QuestionManager {
     );
   }
 
-  getSelectedOptions(questionIndex: number): Set<number> {
-    return this.state?.selectedOptions.get(questionIndex) || new Set();
+  getSelectedOptions(
+    questionIndex: number,
+    scope: string = DEFAULT_INTERACTION_SCOPE,
+  ): Set<number> {
+    return this.stateOf(scope)?.selectedOptions.get(questionIndex) || new Set();
   }
 
-  getSelectedAnswer(questionIndex: number): string {
-    const state = this.state;
+  getSelectedAnswer(
+    questionIndex: number,
+    scope: string = DEFAULT_INTERACTION_SCOPE,
+  ): string {
+    const state = this.stateOf(scope);
     const question = state?.questions[questionIndex];
     if (!state || !question) {
       return "";
@@ -282,11 +309,15 @@ export class QuestionManager {
     return options.join("\n");
   }
 
-  setCustomAnswer(questionIndex: number, answer: string): void {
+  setCustomAnswer(
+    questionIndex: number,
+    answer: string,
+    scope: string = DEFAULT_INTERACTION_SCOPE,
+  ): void {
     logger.debug(
       `[QuestionManager] Custom answer received for question ${questionIndex}: ${answer}`,
     );
-    const state = this.state;
+    const state = this.stateOf(scope);
     if (!state) {
       return;
     }
@@ -297,17 +328,26 @@ export class QuestionManager {
     }
   }
 
-  getCustomAnswer(questionIndex: number): string | undefined {
-    return this.state?.customAnswers.get(questionIndex);
+  getCustomAnswer(
+    questionIndex: number,
+    scope: string = DEFAULT_INTERACTION_SCOPE,
+  ): string | undefined {
+    return this.stateOf(scope)?.customAnswers.get(questionIndex);
   }
 
-  hasCustomAnswer(questionIndex: number): boolean {
-    return this.state?.customAnswers.has(questionIndex) ?? false;
+  hasCustomAnswer(
+    questionIndex: number,
+    scope: string = DEFAULT_INTERACTION_SCOPE,
+  ): boolean {
+    return this.stateOf(scope)?.customAnswers.has(questionIndex) ?? false;
   }
 
   /** Ticks or unticks the custom answer of a multi-select question, like an option. */
-  toggleCustomAnswer(questionIndex: number): void {
-    const state = this.state;
+  toggleCustomAnswer(
+    questionIndex: number,
+    scope: string = DEFAULT_INTERACTION_SCOPE,
+  ): void {
+    const state = this.stateOf(scope);
     if (!state || !state.customAnswers.has(questionIndex)) {
       return;
     }
@@ -319,26 +359,29 @@ export class QuestionManager {
     }
   }
 
-  isCustomAnswerSelected(questionIndex: number): boolean {
-    return this.state?.selectedCustomAnswers.has(questionIndex) ?? false;
+  isCustomAnswerSelected(
+    questionIndex: number,
+    scope: string = DEFAULT_INTERACTION_SCOPE,
+  ): boolean {
+    return this.stateOf(scope)?.selectedCustomAnswers.has(questionIndex) ?? false;
   }
 
-  hasAnswer(questionIndex: number): boolean {
-    return this.getAnswerItems(questionIndex).length > 0;
+  hasAnswer(questionIndex: number, scope: string = DEFAULT_INTERACTION_SCOPE): boolean {
+    return this.getAnswerItems(questionIndex, scope).length > 0;
   }
 
   /**
    * The answer items sent to the agent for one question. A multi-select question
    * sends its ticked options, then the ticked custom answer as one more item.
    */
-  getAnswerItems(questionIndex: number): string[] {
-    const question = this.state?.questions[questionIndex];
+  getAnswerItems(questionIndex: number, scope: string = DEFAULT_INTERACTION_SCOPE): string[] {
+    const question = this.stateOf(scope)?.questions[questionIndex];
     if (!question) {
       return [];
     }
 
-    const selectedAnswer = this.getSelectedAnswer(questionIndex);
-    const customAnswer = this.getCustomAnswer(questionIndex);
+    const selectedAnswer = this.getSelectedAnswer(questionIndex, scope);
+    const customAnswer = this.getCustomAnswer(questionIndex, scope);
 
     if (!question.multiple) {
       // Each option is formatted as "* Label: Description"
@@ -347,7 +390,7 @@ export class QuestionManager {
     }
 
     const items = selectedAnswer.split("\n").filter((part) => part.trim());
-    if (customAnswer && this.isCustomAnswerSelected(questionIndex)) {
+    if (customAnswer && this.isCustomAnswerSelected(questionIndex, scope)) {
       items.push(customAnswer);
     }
 
@@ -358,18 +401,18 @@ export class QuestionManager {
    * The answer items sent to OpenCode for one question. A choice that carries a value is
    * sent as that value; one without is sent as its display line, like `getAnswerItems`.
    */
-  getReplyItems(questionIndex: number): string[] {
-    const question = this.state?.questions[questionIndex];
+  getReplyItems(questionIndex: number, scope: string = DEFAULT_INTERACTION_SCOPE): string[] {
+    const question = this.stateOf(scope)?.questions[questionIndex];
     if (!question) {
       return [];
     }
 
-    const customAnswer = this.getCustomAnswer(questionIndex);
+    const customAnswer = this.getCustomAnswer(questionIndex, scope);
     if (!question.multiple && customAnswer) {
-      return this.getAnswerItems(questionIndex);
+      return this.getAnswerItems(questionIndex, scope);
     }
 
-    const items = Array.from(this.getSelectedOptions(questionIndex)).flatMap((idx) => {
+    const items = Array.from(this.getSelectedOptions(questionIndex, scope)).flatMap((idx) => {
       const opt = question.options[idx];
       if (!opt) {
         return [];
@@ -382,15 +425,15 @@ export class QuestionManager {
         .filter((part) => part.trim());
     });
 
-    if (question.multiple && customAnswer && this.isCustomAnswerSelected(questionIndex)) {
+    if (question.multiple && customAnswer && this.isCustomAnswerSelected(questionIndex, scope)) {
       items.push(customAnswer);
     }
 
     return items;
   }
 
-  nextQuestion(): void {
-    const state = this.state;
+  nextQuestion(scope: string = DEFAULT_INTERACTION_SCOPE): void {
+    const state = this.stateOf(scope);
     if (!state) {
       return;
     }
@@ -404,41 +447,44 @@ export class QuestionManager {
     );
   }
 
-  hasNextQuestion(): boolean {
-    const state = this.state;
+  hasNextQuestion(scope: string = DEFAULT_INTERACTION_SCOPE): boolean {
+    const state = this.stateOf(scope);
     return state !== null && state.currentIndex < state.questions.length;
   }
 
-  getCurrentIndex(): number {
-    return this.state?.currentIndex ?? 0;
+  getCurrentIndex(scope: string = DEFAULT_INTERACTION_SCOPE): number {
+    return this.stateOf(scope)?.currentIndex ?? 0;
   }
 
-  getTotalQuestions(): number {
-    return this.state?.questions.length ?? 0;
+  getTotalQuestions(scope: string = DEFAULT_INTERACTION_SCOPE): number {
+    return this.stateOf(scope)?.questions.length ?? 0;
   }
 
-  addMessageId(messageId: number): void {
-    this.state?.messageIds.push(messageId);
+  addMessageId(messageId: number, scope: string = DEFAULT_INTERACTION_SCOPE): void {
+    this.stateOf(scope)?.messageIds.push(messageId);
   }
 
-  setActiveMessageId(messageId: number): void {
-    const state = this.state;
+  setActiveMessageId(messageId: number, scope: string = DEFAULT_INTERACTION_SCOPE): void {
+    const state = this.stateOf(scope);
     if (state) {
       state.activeMessageId = messageId;
     }
   }
 
-  getActiveMessageId(): number | null {
-    return this.state?.activeMessageId ?? null;
+  getActiveMessageId(scope: string = DEFAULT_INTERACTION_SCOPE): number | null {
+    return this.stateOf(scope)?.activeMessageId ?? null;
   }
 
-  isActiveMessage(messageId: number | null): boolean {
-    const activeMessageId = this.getActiveMessageId();
+  isActiveMessage(
+    messageId: number | null,
+    scope: string = DEFAULT_INTERACTION_SCOPE,
+  ): boolean {
+    const activeMessageId = this.getActiveMessageId(scope);
     return activeMessageId !== null && messageId === activeMessageId;
   }
 
-  startCustomInput(questionIndex: number): void {
-    const state = this.state;
+  startCustomInput(questionIndex: number, scope: string = DEFAULT_INTERACTION_SCOPE): void {
+    const state = this.stateOf(scope);
     if (!state || !state.questions[questionIndex]) {
       return;
     }
@@ -446,38 +492,41 @@ export class QuestionManager {
     state.customInputQuestionIndex = questionIndex;
   }
 
-  clearCustomInput(): void {
-    const state = this.state;
+  clearCustomInput(scope: string = DEFAULT_INTERACTION_SCOPE): void {
+    const state = this.stateOf(scope);
     if (state) {
       state.customInputQuestionIndex = null;
     }
   }
 
-  isWaitingForCustomInput(questionIndex: number): boolean {
-    return this.state?.customInputQuestionIndex === questionIndex;
+  isWaitingForCustomInput(
+    questionIndex: number,
+    scope: string = DEFAULT_INTERACTION_SCOPE,
+  ): boolean {
+    return this.stateOf(scope)?.customInputQuestionIndex === questionIndex;
   }
 
-  getMessageIds(): number[] {
-    return [...(this.state?.messageIds ?? [])];
+  getMessageIds(scope: string = DEFAULT_INTERACTION_SCOPE): number[] {
+    return [...(this.stateOf(scope)?.messageIds ?? [])];
   }
 
-  isActive(): boolean {
-    const active = this.state !== null;
-    logger.debug(`[QuestionManager] isActive check: ${active}`);
+  isActive(scope: string = DEFAULT_INTERACTION_SCOPE): boolean {
+    const active = this.stateOf(scope) !== null;
+    logger.debug(`[QuestionManager] isActive check: scope=${scope}, active=${active}`);
     return active;
   }
 
-  cancel(): void {
-    logger.info("[QuestionManager] Poll cancelled");
-    this.interactionManager.clearKind("question", "question_cancelled");
+  cancel(scope: string = DEFAULT_INTERACTION_SCOPE): void {
+    logger.info(`[QuestionManager] Poll cancelled: scope=${scope}`);
+    this.interactionManager.clearKind("question", "question_cancelled", scope);
   }
 
-  clear(): void {
-    this.interactionManager.clearKind("question", "question_cleared");
+  clear(scope: string = DEFAULT_INTERACTION_SCOPE): void {
+    this.interactionManager.clearKind("question", "question_cleared", scope);
   }
 
-  getAllAnswers(): QuestionAnswer[] {
-    const state = this.state;
+  getAllAnswers(scope: string = DEFAULT_INTERACTION_SCOPE): QuestionAnswer[] {
+    const state = this.stateOf(scope);
     const answers: QuestionAnswer[] = [];
     if (!state) {
       return answers;
@@ -489,8 +538,8 @@ export class QuestionManager {
         continue;
       }
       const finalAnswer = question.multiple
-        ? this.getAnswerItems(i).join("\n")
-        : this.getCustomAnswer(i) || this.getSelectedAnswer(i);
+        ? this.getAnswerItems(i, scope).join("\n")
+        : this.getCustomAnswer(i, scope) || this.getSelectedAnswer(i, scope);
 
       if (finalAnswer) {
         answers.push({

@@ -8,6 +8,12 @@ import { resolveInteractionGuardDecision } from "../../src/bot/middleware/intera
 import { createTestAppContainer } from "../helpers/app-container.js";
 import { startInteractionForTest } from "../helpers/interaction.js";
 
+/**
+ * The scope the guard resolves for a context without a chat: chat 0 with no forum
+ * topic.
+ */
+const SCOPE = "0:no-thread";
+
 /** Regression coverage for the A1 review: detach/unfollow state and two-session busy. */
 describe("spike-a1/regressions", () => {
   describe("attach-manager detach keeps a valid foreground", () => {
@@ -220,7 +226,7 @@ describe("spike-a1/regressions", () => {
       startInteractionForTest(container.interactionManager, {
         kind: "inline",
         expectedInput: "callback",
-      });
+      }, SCOPE);
       container.attachManager.attach("session-1", "D:/repo");
       container.attachManager.attach("session-2", "D:/repo");
       container.attachManager.markBusy("session-1");

@@ -537,6 +537,9 @@ function emitQuestionAsked(
   } as unknown as Event);
 }
 
+/** The scope the unbound chat 42 of these tests resolves to: no forum topic. */
+const SCOPE = "42:no-thread";
+
 describe("bot/services/event-subscription-service", () => {
   let tempHome: string;
   let activeService: {
@@ -2989,13 +2992,13 @@ describe("bot/services/event-subscription-service", () => {
     emitPermissionAsked(summaryAggregator, "permission-2", ["D:/other/*"]);
 
     await vi.waitFor(() => {
-      expect(permissionManager.getPendingCount()).toBe(2);
+      expect(permissionManager.getPendingCount(SCOPE)).toBe(2);
     });
 
     emitPermissionReplied(summaryAggregator, "permission-2");
 
     await vi.waitFor(() => {
-      expect(permissionManager.getPendingCount()).toBe(1);
+      expect(permissionManager.getPendingCount(SCOPE)).toBe(1);
     });
     const outside = `${t("permission.outcome.always")}${t("permission.outcome.outside_suffix")}`;
     const edit = defined(findEdit(api, 501));
@@ -3003,14 +3006,14 @@ describe("bot/services/event-subscription-service", () => {
     expect(String(edit[2]).endsWith(`\n${outside}`)).toBe(true);
     expect(edit[3]).toBeUndefined();
     expect(api.deleteMessage).not.toHaveBeenCalled();
-    expect(permissionManager.getRequestID(500)).toBe("permission-1");
-    expect(interactionManager.getSnapshot()?.metadata.pendingCount).toBe(1);
+    expect(permissionManager.getRequestID(500, SCOPE)).toBe("permission-1");
+    expect(interactionManager.getSnapshot(SCOPE)?.metadata.pendingCount).toBe(1);
 
     emitPermissionReplied(summaryAggregator, "permission-1", null);
 
     await vi.waitFor(() => {
-      expect(permissionManager.isActive()).toBe(false);
-      expect(interactionManager.getSnapshot()).toBeNull();
+      expect(permissionManager.isActive(SCOPE)).toBe(false);
+      expect(interactionManager.getSnapshot(SCOPE)).toBeNull();
     });
     expect(
       String(defined(findEdit(api, 500))[2]).endsWith(`\n${t("permission.outcome.settled_outside")}`),
@@ -3024,7 +3027,7 @@ describe("bot/services/event-subscription-service", () => {
 
     emitPermissionAsked(summaryAggregator, "permission-1");
     await vi.waitFor(() => {
-      expect(permissionManager.getPendingCount()).toBe(1);
+      expect(permissionManager.getPendingCount(SCOPE)).toBe(1);
     });
 
     interactionManager.reset("abort_command");
@@ -3049,13 +3052,13 @@ describe("bot/services/event-subscription-service", () => {
 
     emitPermissionAsked(summaryAggregator, "permission-1");
     await vi.waitFor(() => {
-      expect(permissionManager.getPendingCount()).toBe(1);
+      expect(permissionManager.getPendingCount(SCOPE)).toBe(1);
     });
 
     emitSessionIdle(summaryAggregator);
 
     await vi.waitFor(() => {
-      expect(permissionManager.isActive()).toBe(false);
+      expect(permissionManager.isActive(SCOPE)).toBe(false);
     });
     expect(
       String(defined(findEdit(api, 530))[2]).endsWith(`\n${t("permission.outcome.not_answered")}`),
@@ -3086,8 +3089,8 @@ describe("bot/services/event-subscription-service", () => {
     await vi.waitFor(() => {
       expect(api.deleteMessage).toHaveBeenCalledWith(42, 502);
     });
-    expect(permissionManager.isActive()).toBe(false);
-    expect(interactionManager.getSnapshot()).toBeNull();
+    expect(permissionManager.isActive(SCOPE)).toBe(false);
+    expect(interactionManager.getSnapshot(SCOPE)).toBeNull();
   });
 
   function getInteractionManagers() {
@@ -3106,7 +3109,7 @@ describe("bot/services/event-subscription-service", () => {
 
     emitQuestionAsked(summaryAggregator, "question-1");
     await vi.waitFor(() => {
-      expect(questionManager.getActiveMessageId()).not.toBeNull();
+      expect(questionManager.getActiveMessageId(SCOPE)).not.toBeNull();
     });
     emitPermissionAsked(summaryAggregator, "permission-1");
     await vi.waitFor(() => {
@@ -3121,22 +3124,22 @@ describe("bot/services/event-subscription-service", () => {
 
     emitPermissionAsked(summaryAggregator, "permission-1");
     await vi.waitFor(() => {
-      expect(permissionManager.getPendingCount()).toBe(1);
+      expect(permissionManager.getPendingCount(SCOPE)).toBe(1);
     });
 
     emitQuestionAsked(summaryAggregator, "question-1");
     await vi.waitFor(() => {
       expect(interactionManager.getWaitingKind()).toBe("question");
     });
-    expect(questionManager.isActive()).toBe(false);
+    expect(questionManager.isActive(SCOPE)).toBe(false);
     expect(api.sendMessage).toHaveBeenCalledTimes(1);
 
     emitPermissionReplied(summaryAggregator, "permission-1");
 
     await vi.waitFor(() => {
-      expect(questionManager.getActiveMessageId()).not.toBeNull();
+      expect(questionManager.getActiveMessageId(SCOPE)).not.toBeNull();
     });
-    expect(questionManager.getRequestID()).toBe("question-1");
+    expect(questionManager.getRequestID(SCOPE)).toBe("question-1");
     expect(interactionManager.getWaitingKind()).toBeNull();
   });
 
@@ -3150,15 +3153,15 @@ describe("bot/services/event-subscription-service", () => {
     emitPermissionAsked(summaryAggregator, "permission-2", ["D:/other/*"]);
     await settle();
     const sendsBefore = api.sendMessage.mock.calls.length;
-    expect(permissionManager.isActive()).toBe(false);
+    expect(permissionManager.isActive(SCOPE)).toBe(false);
 
-    questionManager.cancel();
+    questionManager.cancel(SCOPE);
 
     await vi.waitFor(() => {
-      expect(permissionManager.getPendingCount()).toBe(2);
+      expect(permissionManager.getPendingCount(SCOPE)).toBe(2);
     });
     expect(api.sendMessage).toHaveBeenCalledTimes(sendsBefore + 2);
-    expect(interactionManager.getSnapshot()?.kind).toBe("permission");
+    expect(interactionManager.getSnapshot(SCOPE)?.kind).toBe("permission");
   });
 
   it("never shows a waiting permission answered elsewhere", async () => {
@@ -3171,15 +3174,15 @@ describe("bot/services/event-subscription-service", () => {
     await vi.waitFor(() => {
       expect(interactionManager.getWaitingKind()).toBeNull();
     });
-    expect(questionManager.isActive()).toBe(true);
+    expect(questionManager.isActive(SCOPE)).toBe(true);
     const sendsBefore = api.sendMessage.mock.calls.length;
 
-    questionManager.cancel();
+    questionManager.cancel(SCOPE);
     await settle();
 
     expect(api.sendMessage).toHaveBeenCalledTimes(sendsBefore);
-    expect(permissionManager.isActive()).toBe(false);
-    expect(interactionManager.getSnapshot()).toBeNull();
+    expect(permissionManager.isActive(SCOPE)).toBe(false);
+    expect(interactionManager.getSnapshot(SCOPE)).toBeNull();
   });
 
   it("replaces the poll on screen without releasing the waiting permission", async () => {
@@ -3190,12 +3193,12 @@ describe("bot/services/event-subscription-service", () => {
 
     emitQuestionAsked(summaryAggregator, "question-2");
     await vi.waitFor(() => {
-      expect(questionManager.getRequestID()).toBe("question-2");
+      expect(questionManager.getRequestID(SCOPE)).toBe("question-2");
     });
     await settle();
 
     expect(interactionManager.getWaitingKind()).toBe("permission");
-    expect(permissionManager.isActive()).toBe(false);
+    expect(permissionManager.isActive(SCOPE)).toBe(false);
   });
 
   it("shows the waiting permission when the question tool fails", async () => {
@@ -3210,9 +3213,9 @@ describe("bot/services/event-subscription-service", () => {
     aggregator.onQuestionErrorCallback("session-1");
 
     await vi.waitFor(() => {
-      expect(permissionManager.getPendingCount()).toBe(1);
+      expect(permissionManager.getPendingCount(SCOPE)).toBe(1);
     });
-    expect(questionManager.isActive()).toBe(false);
+    expect(questionManager.isActive(SCOPE)).toBe(false);
   });
 
   it("drops a waiting poll when the question tool fails behind permissions", async () => {
@@ -3221,7 +3224,7 @@ describe("bot/services/event-subscription-service", () => {
 
     emitPermissionAsked(summaryAggregator, "permission-1");
     await vi.waitFor(() => {
-      expect(permissionManager.getPendingCount()).toBe(1);
+      expect(permissionManager.getPendingCount(SCOPE)).toBe(1);
     });
     emitQuestionAsked(summaryAggregator, "question-1");
     await vi.waitFor(() => {
@@ -3234,7 +3237,7 @@ describe("bot/services/event-subscription-service", () => {
     aggregator.onQuestionErrorCallback("session-1");
 
     expect(interactionManager.getWaitingKind()).toBeNull();
-    expect(permissionManager.getPendingCount()).toBe(1);
+    expect(permissionManager.getPendingCount(SCOPE)).toBe(1);
   });
 
   describe("subagent questions and polls settled outside Telegram", () => {
@@ -3252,10 +3255,10 @@ describe("bot/services/event-subscription-service", () => {
       emitQuestionAsked(summaryAggregator, "question-child", "child-session-1");
 
       await vi.waitFor(() => {
-        expect(questionManager.getActiveMessageId()).not.toBeNull();
+        expect(questionManager.getActiveMessageId(SCOPE)).not.toBeNull();
       });
-      expect(questionManager.getRequestID()).toBe("question-child");
-      expect(questionManager.getSessionId()).toBe("child-session-1");
+      expect(questionManager.getRequestID(SCOPE)).toBe("question-child");
+      expect(questionManager.getSessionId(SCOPE)).toBe("child-session-1");
       expect(JSON.stringify(api.sendMessage.mock.calls)).toContain("Which option for question-child?");
     });
 
@@ -3266,7 +3269,7 @@ describe("bot/services/event-subscription-service", () => {
       emitQuestionAsked(summaryAggregator, "question-other", "other-session");
       await settle();
 
-      expect(questionManager.isActive()).toBe(false);
+      expect(questionManager.isActive(SCOPE)).toBe(false);
       expect(interactionManager.getWaitingKind()).toBeNull();
     });
 
@@ -3280,21 +3283,21 @@ describe("bot/services/event-subscription-service", () => {
       emitSubagentStart(summaryAggregator, "2");
       emitQuestionAsked(summaryAggregator, "question-a", "child-session-1");
       await vi.waitFor(() => {
-        expect(questionManager.getActiveMessageId()).not.toBeNull();
+        expect(questionManager.getActiveMessageId(SCOPE)).not.toBeNull();
       });
-      const firstPollMessageId = questionManager.getActiveMessageId() ?? 0;
+      const firstPollMessageId = questionManager.getActiveMessageId(SCOPE) ?? 0;
 
       emitQuestionAsked(summaryAggregator, "question-b", "child-session-2");
       await vi.waitFor(() => {
         expect(interactionManager.getWaitingQuestionRequestIds()).toEqual(["question-b"]);
       });
-      expect(questionManager.getRequestID()).toBe("question-a");
+      expect(questionManager.getRequestID(SCOPE)).toBe("question-a");
 
       emitQuestionSettled(summaryAggregator, "question.replied", "question-a", "child-session-1");
 
       await vi.waitFor(() => {
-        expect(questionManager.getRequestID()).toBe("question-b");
-        expect(questionManager.getActiveMessageId()).not.toBeNull();
+        expect(questionManager.getRequestID(SCOPE)).toBe("question-b");
+        expect(questionManager.getActiveMessageId(SCOPE)).not.toBeNull();
       });
       const closed = pollEdits(api, firstPollMessageId);
       expect(closed).toHaveLength(1);
@@ -3310,13 +3313,13 @@ describe("bot/services/event-subscription-service", () => {
 
       emitQuestionAsked(summaryAggregator, "question-1");
       await vi.waitFor(() => {
-        expect(questionManager.getActiveMessageId()).toBe(720);
+        expect(questionManager.getActiveMessageId(SCOPE)).toBe(720);
       });
 
       emitQuestionSettled(summaryAggregator, "question.rejected", "question-1");
 
       await vi.waitFor(() => {
-        expect(questionManager.isActive()).toBe(false);
+        expect(questionManager.isActive(SCOPE)).toBe(false);
       });
       expect(pollEdits(api, 720)[0]).toContain(t("question.settled_outside.cancelled"));
     });
@@ -3328,7 +3331,7 @@ describe("bot/services/event-subscription-service", () => {
 
       emitQuestionAsked(summaryAggregator, "question-1");
       await vi.waitFor(() => {
-        expect(questionManager.getActiveMessageId()).toBe(721);
+        expect(questionManager.getActiveMessageId(SCOPE)).toBe(721);
       });
       // The edit takes a network round trip: the tool error lands while it is on its way.
       api.editMessageText.mockImplementation(
@@ -3339,7 +3342,7 @@ describe("bot/services/event-subscription-service", () => {
       emitQuestionToolError(summaryAggregator);
       await settle();
 
-      expect(questionManager.isActive()).toBe(false);
+      expect(questionManager.isActive(SCOPE)).toBe(false);
       expect(pollEdits(api, 721)[0]).toContain(t("question.settled_outside.cancelled"));
       expect(api.deleteMessage).not.toHaveBeenCalledWith(42, 721);
     });
@@ -3351,16 +3354,16 @@ describe("bot/services/event-subscription-service", () => {
 
       emitQuestionAsked(summaryAggregator, "question-1");
       await vi.waitFor(() => {
-        expect(questionManager.getActiveMessageId()).toBe(722);
+        expect(questionManager.getActiveMessageId(SCOPE)).toBe(722);
       });
-      questionManager.startDismissal();
+      questionManager.startDismissal(SCOPE);
 
       emitQuestionSettled(summaryAggregator, "question.rejected", "question-1");
       emitQuestionToolError(summaryAggregator);
       await settle();
 
-      expect(questionManager.isActive()).toBe(true);
-      expect(questionManager.getSettledWhileSending()).toBe("cancelled");
+      expect(questionManager.isActive(SCOPE)).toBe(true);
+      expect(questionManager.getSettledWhileSending(SCOPE)).toBe("cancelled");
       expect(pollEdits(api, 722)).toHaveLength(0);
       expect(api.deleteMessage).not.toHaveBeenCalledWith(42, 722);
     });
@@ -3372,10 +3375,10 @@ describe("bot/services/event-subscription-service", () => {
 
       emitQuestionAsked(summaryAggregator, "question-1");
       await vi.waitFor(() => {
-        expect(questionManager.getActiveMessageId()).toBe(723);
+        expect(questionManager.getActiveMessageId(SCOPE)).toBe(723);
       });
-      questionManager.startDismissal();
-      questionManager.failDismissal();
+      questionManager.startDismissal(SCOPE);
+      questionManager.failDismissal(SCOPE);
       api.editMessageText.mockImplementation(
         () => new Promise((resolve) => setTimeout(() => resolve(true), 10)),
       );
@@ -3384,7 +3387,7 @@ describe("bot/services/event-subscription-service", () => {
       emitQuestionToolError(summaryAggregator);
       await settle();
 
-      expect(questionManager.isActive()).toBe(false);
+      expect(questionManager.isActive(SCOPE)).toBe(false);
       expect(api.editMessageText).toHaveBeenCalledWith(42, 723, t("question.cancelled"));
       expect(api.deleteMessage).not.toHaveBeenCalledWith(42, 723);
     });
@@ -3396,14 +3399,14 @@ describe("bot/services/event-subscription-service", () => {
 
       emitQuestionAsked(summaryAggregator, "question-1");
       await vi.waitFor(() => {
-        expect(questionManager.getActiveMessageId()).toBe(730);
+        expect(questionManager.getActiveMessageId(SCOPE)).toBe(730);
       });
-      questionManager.startAnswer();
+      questionManager.startAnswer(SCOPE);
 
       emitQuestionSettled(summaryAggregator, "question.replied", "question-1");
       await settle();
 
-      expect(questionManager.isActive()).toBe(true);
+      expect(questionManager.isActive(SCOPE)).toBe(true);
       expect(pollEdits(api, 730)).toHaveLength(0);
     });
 
@@ -3413,7 +3416,7 @@ describe("bot/services/event-subscription-service", () => {
 
       emitPermissionAsked(summaryAggregator, "permission-1");
       await vi.waitFor(() => {
-        expect(permissionManager.getPendingCount()).toBe(1);
+        expect(permissionManager.getPendingCount(SCOPE)).toBe(1);
       });
       emitQuestionAsked(summaryAggregator, "question-1");
       await vi.waitFor(() => {
@@ -3425,7 +3428,7 @@ describe("bot/services/event-subscription-service", () => {
       await vi.waitFor(() => {
         expect(interactionManager.getWaitingKind()).toBeNull();
       });
-      expect(permissionManager.getPendingCount()).toBe(1);
+      expect(permissionManager.getPendingCount(SCOPE)).toBe(1);
     });
 
     it("keeps a subagent's poll when the followed session's question tool fails", async () => {
@@ -3435,7 +3438,7 @@ describe("bot/services/event-subscription-service", () => {
       emitSubagentStart(summaryAggregator);
       emitQuestionAsked(summaryAggregator, "question-child", "child-session-1");
       await vi.waitFor(() => {
-        expect(questionManager.getActiveMessageId()).not.toBeNull();
+        expect(questionManager.getActiveMessageId(SCOPE)).not.toBeNull();
       });
 
       const aggregator = summaryAggregator as unknown as {
@@ -3444,7 +3447,7 @@ describe("bot/services/event-subscription-service", () => {
       aggregator.onQuestionErrorCallback("session-1");
       await settle();
 
-      expect(questionManager.getRequestID()).toBe("question-child");
+      expect(questionManager.getRequestID(SCOPE)).toBe("question-child");
     });
 
     describe("polls whose question ends before they reach the chat", () => {
@@ -3491,7 +3494,7 @@ describe("bot/services/event-subscription-service", () => {
         await settle();
 
         expect(pollTextSent(api, "question-1")).toBe(false);
-        expect(questionManager.isActive()).toBe(false);
+        expect(questionManager.isActive(SCOPE)).toBe(false);
       });
 
       it("never shows a poll whose run was reset while the messages before it went out", async () => {
@@ -3506,7 +3509,7 @@ describe("bot/services/event-subscription-service", () => {
         await settle();
 
         expect(pollTextSent(api, "question-1")).toBe(false);
-        expect(questionManager.isActive()).toBe(false);
+        expect(questionManager.isActive(SCOPE)).toBe(false);
       });
 
       it("still shows a pending poll when only a permission clear moved the generation", async () => {
@@ -3516,13 +3519,13 @@ describe("bot/services/event-subscription-service", () => {
 
         emitQuestionAsked(summaryAggregator, "question-1");
         await settle();
-        interactionManager.bumpGeneration();
+        interactionManager.bumpGeneration(SCOPE);
         release();
 
         await vi.waitFor(() => {
-          expect(questionManager.getActiveMessageId()).not.toBeNull();
+          expect(questionManager.getActiveMessageId(SCOPE)).not.toBeNull();
         });
-        expect(questionManager.getRequestID()).toBe("question-1");
+        expect(questionManager.getRequestID(SCOPE)).toBe("question-1");
       });
 
       it("closes a poll that lands after its question was cancelled outside Telegram", async () => {
@@ -3532,7 +3535,7 @@ describe("bot/services/event-subscription-service", () => {
 
         emitQuestionAsked(summaryAggregator, "question-1");
         await vi.waitFor(() => {
-          expect(questionManager.getRequestID()).toBe("question-1");
+          expect(questionManager.getRequestID(SCOPE)).toBe("question-1");
         });
         emitQuestionSettled(summaryAggregator, "question.rejected", "question-1");
         await settle();
@@ -3543,7 +3546,7 @@ describe("bot/services/event-subscription-service", () => {
         expect(edits).toHaveLength(1);
         expect(edits[0]).toContain(t("question.settled_outside.cancelled"));
         expect(edits[0]).not.toContain("reply_markup");
-        expect(questionManager.isActive()).toBe(false);
+        expect(questionManager.isActive(SCOPE)).toBe(false);
       });
 
       it("keeps the first ending when a reset comes before OpenCode's own cancel", async () => {
@@ -3553,7 +3556,7 @@ describe("bot/services/event-subscription-service", () => {
 
         emitQuestionAsked(summaryAggregator, "question-1");
         await vi.waitFor(() => {
-          expect(questionManager.getRequestID()).toBe("question-1");
+          expect(questionManager.getRequestID(SCOPE)).toBe("question-1");
         });
         interactionManager.reset("abort_command");
         emitQuestionSettled(summaryAggregator, "question.rejected", "question-1");
@@ -3564,7 +3567,7 @@ describe("bot/services/event-subscription-service", () => {
         const edits = pollEdits(api, 761);
         expect(edits).toHaveLength(1);
         expect(edits[0]).toContain(t("question.not_answered"));
-        expect(questionManager.isActive()).toBe(false);
+        expect(questionManager.isActive(SCOPE)).toBe(false);
       });
 
       it("ends a poll that lands after its run ended and frees the slot", async () => {
@@ -3574,7 +3577,7 @@ describe("bot/services/event-subscription-service", () => {
 
         emitQuestionAsked(summaryAggregator, "question-1");
         await vi.waitFor(() => {
-          expect(questionManager.getRequestID()).toBe("question-1");
+          expect(questionManager.getRequestID(SCOPE)).toBe("question-1");
         });
         const aggregator = summaryAggregator as unknown as {
           onSessionRunEndedCallback: (sessionId: string) => Promise<void>;
@@ -3586,7 +3589,7 @@ describe("bot/services/event-subscription-service", () => {
         const edits = pollEdits(api, 762);
         expect(edits).toHaveLength(1);
         expect(edits[0]).toContain(t("question.not_answered"));
-        expect(interactionManager.getSnapshot()).toBeNull();
+        expect(interactionManager.getSnapshot(SCOPE)).toBeNull();
       });
 
       it("deletes a poll that lands after a newer poll of its session replaced it", async () => {
@@ -3597,18 +3600,18 @@ describe("bot/services/event-subscription-service", () => {
 
         emitQuestionAsked(summaryAggregator, "question-1");
         await vi.waitFor(() => {
-          expect(questionManager.getRequestID()).toBe("question-1");
+          expect(questionManager.getRequestID(SCOPE)).toBe("question-1");
         });
         emitQuestionAsked(summaryAggregator, "question-2");
         await vi.waitFor(() => {
-          expect(questionManager.getActiveMessageId()).toBe(764);
+          expect(questionManager.getActiveMessageId(SCOPE)).toBe(764);
         });
         release();
 
         await vi.waitFor(() => {
           expect(api.deleteMessage).toHaveBeenCalledWith(42, 763);
         });
-        expect(questionManager.getRequestID()).toBe("question-2");
+        expect(questionManager.getRequestID(SCOPE)).toBe("question-2");
         expect(pollEdits(api, 763)).toHaveLength(0);
       });
 
@@ -3619,7 +3622,7 @@ describe("bot/services/event-subscription-service", () => {
 
         emitQuestionAsked(summaryAggregator, "question-1");
         await vi.waitFor(() => {
-          expect(questionManager.getActiveMessageId()).toBe(765);
+          expect(questionManager.getActiveMessageId(SCOPE)).toBe(765);
         });
         interactionManager.reset("abort_command");
         await settle();
@@ -3640,13 +3643,13 @@ describe("bot/services/event-subscription-service", () => {
     await showPollWithWaitingPermission(summaryAggregator);
     const sendsBefore = api.sendMessage.mock.calls.length;
 
-    questionManager.cancel();
+    questionManager.cancel(SCOPE);
     interactionManager.reset("abort_command");
     await settle();
 
     expect(api.sendMessage).toHaveBeenCalledTimes(sendsBefore);
-    expect(permissionManager.isActive()).toBe(false);
-    expect(interactionManager.getSnapshot()).toBeNull();
+    expect(permissionManager.isActive(SCOPE)).toBe(false);
+    expect(interactionManager.getSnapshot(SCOPE)).toBeNull();
   });
 
   it("does not close the compact card while a permission waits, and closes it when the prompt appears", async () => {
@@ -3674,7 +3677,7 @@ describe("bot/services/event-subscription-service", () => {
     expect(hasText(waitingPermissionText)).toBe(false);
     expect(api.deleteMessage).not.toHaveBeenCalled();
 
-    questionManager.cancel();
+    questionManager.cancel(SCOPE);
 
     await vi.waitFor(
       () => {

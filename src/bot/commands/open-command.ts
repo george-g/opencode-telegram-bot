@@ -7,6 +7,7 @@ import { isContainerRuntime } from "../../runtime/container.js";
 import { logger } from "../../utils/logger.js";
 import { buildOpenRootsKeyboard, clearOpenPathIndex, renderOpenBrowseView } from "../menus/file-browser-menu.js";
 import { replyBusyBlocked } from "../messages/busy-blocked-renderer.js";
+import { getInteractionScope } from "../middleware/interaction-scope.js";
 
 export type OpenCommandDeps = Pick<
   AppContainer,
@@ -50,14 +51,17 @@ export async function openCommand(
 
     const message = await ctx.reply(text, { reply_markup: keyboard });
 
-    deps.interactionManager.start({
-      kind: "inline",
-      expectedInput: "callback",
-      metadata: {
-        menuKind: "open",
-        messageId: message.message_id,
+    deps.interactionManager.start(
+      {
+        kind: "inline",
+        expectedInput: "callback",
+        metadata: {
+          menuKind: "open",
+          messageId: message.message_id,
+        },
       },
-    });
+      getInteractionScope(ctx),
+    );
   } catch (error) {
     logger.error("[Bot] Error opening directory browser:", error);
     await ctx.reply(t("open.open_error"));

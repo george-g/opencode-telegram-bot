@@ -30,8 +30,9 @@ interface InteractionBase {
 }
 
 /**
- * The single interaction slot. Exactly one kind can be live at a time, and a
- * stateful kind cannot be live without its data.
+ * One interaction slot. Every chat and topic holds its own slot, so exactly one
+ * kind can be live at a time per scope. A stateful kind cannot be live without
+ * its data.
  */
 export type ActiveInteraction =
   | (InteractionBase & { kind: "question"; payload: QuestionState })

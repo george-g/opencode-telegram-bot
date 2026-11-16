@@ -7,6 +7,7 @@ import type {
   PermissionState,
 } from "../types/permission.js";
 import type { InteractionManager } from "./interaction-manager.js";
+import { DEFAULT_INTERACTION_SCOPE } from "../types/interaction-scope.js";
 import { logger } from "../../utils/logger.js";
 
 /**
@@ -24,27 +25,34 @@ function createEmptyState(): PermissionState {
   };
 }
 
+/**
+ * Permission prompts of one interaction scope. Prompts live in the slot of their
+ * own chat and topic, so a prompt in one topic never blocks, replaces or reads a
+ * prompt of another. Every method takes the scope last and defaults to the
+ * plain-chat one.
+ */
 export class PermissionManager {
   private resolvedRequestIDs = new Set<string>();
-  private resolvedGeneration = 0;
+  private resolvedResetEpoch = 0;
   // Prompts on their way to Telegram, by signature: a second show of the same request
   // waits for the first to land instead of sending its own prompt.
   private presenting = new Map<string, Promise<void>>();
 
   constructor(private readonly interactionManager: InteractionManager) {}
 
-  private get state(): PermissionState | null {
-    return this.interactionManager.getPayload("permission");
+  private stateOf(scope: string): PermissionState | null {
+    return this.interactionManager.getPayload("permission", scope);
   }
 
   /**
-   * Resolved ids only matter within one generation; a reset forgets them.
+   * Resolved ids live until a full reset forgets them. A scope-local clear bumps
+   * only that scope's epoch, so the set is keyed to the full-reset epoch alone.
    */
   private getResolvedRequestIDs(): Set<string> {
-    const generation = this.interactionManager.getGeneration();
-    if (generation !== this.resolvedGeneration) {
+    const resetEpoch = this.interactionManager.getResetEpoch();
+    if (resetEpoch !== this.resolvedResetEpoch) {
       this.resolvedRequestIDs.clear();
-      this.resolvedGeneration = generation;
+      this.resolvedResetEpoch = resetEpoch;
     }
 
     return this.resolvedRequestIDs;
@@ -59,13 +67,15 @@ export class PermissionManager {
   }
 
   /**
-   * Check whether a request can still be shown in the given generation
+   * Check whether a request can still be shown in the given generation of its own
+   * scope. An omitted generation is the current one of that scope.
    */
   getDropReason(
     request: PermissionRequest,
-    generation: number = this.getGeneration(),
+    generation?: number,
+    scope: string = DEFAULT_INTERACTION_SCOPE,
   ): "stale" | "resolved" | null {
-    if (generation !== this.getGeneration()) {
+    if ((generation ?? this.getGeneration(scope)) !== this.getGeneration(scope)) {
       return "stale";
     }
 
@@ -99,13 +109,14 @@ export class PermissionManager {
   startPermission(
     request: PermissionRequest,
     messageId: number,
-    generation: number = this.getGeneration(),
+    generation?: number,
+    scope: string = DEFAULT_INTERACTION_SCOPE,
   ): StartPermissionResult {
     logger.debug(
-      `[PermissionManager] startPermission: id=${request.id}, permission=${request.permission}, messageId=${messageId}`,
+      `[PermissionManager] startPermission: id=${request.id}, permission=${request.permission}, messageId=${messageId}, scope=${scope}`,
     );
 
-    const dropReason = this.getDropReason(request, generation);
+    const dropReason = this.getDropReason(request, generation, scope);
     if (dropReason) {
       logger.debug(
         `[PermissionManager] Ignoring ${dropReason} request: id=${request.id}`,
@@ -113,21 +124,24 @@ export class PermissionManager {
       return dropReason;
     }
 
-    if (this.interactionManager.getSnapshot()?.kind === "question") {
+    if (this.interactionManager.getSnapshot(scope)?.kind === "question") {
       logger.info(
         `[PermissionManager] Poll is on screen, not registering permission: id=${request.id}`,
       );
       return "question_active";
     }
 
-    let state = this.state;
+    let state = this.stateOf(scope);
     if (!state) {
       state = createEmptyState();
-      this.interactionManager.start({
-        kind: "permission",
-        expectedInput: "callback",
-        payload: state,
-      });
+      this.interactionManager.start(
+        {
+          kind: "permission",
+          expectedInput: "callback",
+          payload: state,
+        },
+        scope,
+      );
     }
 
     const previous = state.requestsByMessageId.get(messageId);
@@ -155,16 +169,17 @@ export class PermissionManager {
    */
   addEquivalentRequest(
     request: PermissionRequest,
-    generation: number = this.getGeneration(),
+    generation?: number,
+    scope: string = DEFAULT_INTERACTION_SCOPE,
   ): GroupedPermissionMessage | null {
-    if (this.getDropReason(request, generation)) {
+    if (this.getDropReason(request, generation, scope)) {
       logger.debug(
         `[PermissionManager] Ignoring stale or already resolved equivalent request: id=${request.id}`,
       );
       return null;
     }
 
-    const state = this.state;
+    const state = this.stateOf(scope);
     if (!state) {
       return null;
     }
@@ -201,58 +216,67 @@ export class PermissionManager {
   /**
    * Get permission request by Telegram message ID
    */
-  getRequest(messageId: number | null): PermissionRequest | null {
+  getRequest(
+    messageId: number | null,
+    scope: string = DEFAULT_INTERACTION_SCOPE,
+  ): PermissionRequest | null {
     if (messageId === null) {
       return null;
     }
 
-    return this.state?.requestsByMessageId.get(messageId) ?? null;
+    return this.stateOf(scope)?.requestsByMessageId.get(messageId) ?? null;
   }
 
   /**
    * Get request ID for API reply by Telegram message ID
    */
-  getRequestID(messageId: number | null): string | null {
-    return this.getRequest(messageId)?.id ?? null;
+  getRequestID(
+    messageId: number | null,
+    scope: string = DEFAULT_INTERACTION_SCOPE,
+  ): string | null {
+    return this.getRequest(messageId, scope)?.id ?? null;
   }
 
   /**
    * Get all OpenCode request IDs grouped behind a Telegram message.
    */
-  getRequestIDs(messageId: number | null): string[] {
+  getRequestIDs(messageId: number | null, scope: string = DEFAULT_INTERACTION_SCOPE): string[] {
     if (messageId === null) {
       return [];
     }
 
-    return [...(this.state?.requestIdsByMessageId.get(messageId) ?? [])];
+    return [...(this.stateOf(scope)?.requestIdsByMessageId.get(messageId) ?? [])];
   }
 
   /**
    * Get permission type (bash, edit, etc.) by message ID
    */
-  getPermissionType(messageId: number | null): string | null {
-    return this.getRequest(messageId)?.permission ?? null;
+  getPermissionType(
+    messageId: number | null,
+    scope: string = DEFAULT_INTERACTION_SCOPE,
+  ): string | null {
+    return this.getRequest(messageId, scope)?.permission ?? null;
   }
 
   /**
    * Get patterns (commands/files) by message ID
    */
-  getPatterns(messageId: number | null): string[] {
-    return this.getRequest(messageId)?.patterns ?? [];
+  getPatterns(messageId: number | null, scope: string = DEFAULT_INTERACTION_SCOPE): string[] {
+    return this.getRequest(messageId, scope)?.patterns ?? [];
   }
 
   /**
    * Check if callback message ID belongs to active permission request
    */
-  isActiveMessage(messageId: number | null): boolean {
-    return messageId !== null && (this.state?.requestsByMessageId.has(messageId) ?? false);
+  isActiveMessage(messageId: number | null, scope: string = DEFAULT_INTERACTION_SCOPE): boolean {
+    return messageId !== null && (this.stateOf(scope)?.requestsByMessageId.has(messageId) ?? false);
   }
 
   /**
    * Get latest Telegram message ID
    */
-  getMessageId(): number | null {
-    const messageIds = this.getMessageIds();
+  getMessageId(scope: string = DEFAULT_INTERACTION_SCOPE): number | null {
+    const messageIds = this.getMessageIds(scope);
     if (messageIds.length === 0) {
       return null;
     }
@@ -263,15 +287,20 @@ export class PermissionManager {
   /**
    * Get Telegram message IDs for all active requests
    */
-  getMessageIds(): number[] {
-    return Array.from(this.state?.requestsByMessageId.keys() ?? []);
+  getMessageIds(scope: string = DEFAULT_INTERACTION_SCOPE): number[] {
+    return Array.from(this.stateOf(scope)?.requestsByMessageId.keys() ?? []);
   }
 
   /**
    * Record the answer tapped on a prompt as being sent. False when one is already on its way.
    */
-  markSending(messageId: number, reply: PermissionReply, settlesSession: boolean): boolean {
-    const state = this.state;
+  markSending(
+    messageId: number,
+    reply: PermissionReply,
+    settlesSession: boolean,
+    scope: string = DEFAULT_INTERACTION_SCOPE,
+  ): boolean {
+    const state = this.stateOf(scope);
     const requestIds = state?.requestIdsByMessageId.get(messageId);
     if (!state || !requestIds || state.sendsByMessageId.has(messageId)) {
       return false;
@@ -281,16 +310,20 @@ export class PermissionManager {
     return true;
   }
 
-  isSending(messageId: number | null): boolean {
-    return messageId !== null && (this.state?.sendsByMessageId.has(messageId) ?? false);
+  isSending(messageId: number | null, scope: string = DEFAULT_INTERACTION_SCOPE): boolean {
+    return messageId !== null && (this.stateOf(scope)?.sendsByMessageId.has(messageId) ?? false);
   }
 
   /**
    * The answer did not get through for every request: the ones OpenCode took leave the
    * prompt, the rest stay open and answerable again
    */
-  failSending(messageId: number, acceptedRequestIds: string[]): PermissionPromptChange | null {
-    const state = this.state;
+  failSending(
+    messageId: number,
+    acceptedRequestIds: string[],
+    scope: string = DEFAULT_INTERACTION_SCOPE,
+  ): PermissionPromptChange | null {
+    const state = this.stateOf(scope);
     const request = state?.requestsByMessageId.get(messageId);
     const send = state?.sendsByMessageId.get(messageId);
     if (!state || !request || !send) {
@@ -307,7 +340,11 @@ export class PermissionManager {
     );
     if (openIds.length === 0) {
       // The requests that failed were settled by OpenCode's own events meanwhile.
-      return this.endPrompt(messageId, { kind: "replied", reply: send.reply, outside: false });
+      return this.endPrompt(
+        messageId,
+        { kind: "replied", reply: send.reply, outside: false },
+        scope,
+      );
     }
 
     state.requestIdsByMessageId.set(messageId, openIds);
@@ -317,8 +354,12 @@ export class PermissionManager {
   /**
    * End a prompt with an outcome, settling every request it still has open
    */
-  endPrompt(messageId: number, outcome: PermissionOutcome): PermissionPromptChange | null {
-    const state = this.state;
+  endPrompt(
+    messageId: number,
+    outcome: PermissionOutcome,
+    scope: string = DEFAULT_INTERACTION_SCOPE,
+  ): PermissionPromptChange | null {
+    const state = this.stateOf(scope);
     const request = state?.requestsByMessageId.get(messageId);
     if (!state || !request) {
       return null;
@@ -345,11 +386,12 @@ export class PermissionManager {
     requestID: string,
     reply: PermissionReply | null,
     lost = false,
+    scope: string = DEFAULT_INTERACTION_SCOPE,
   ): PermissionPromptChange[] {
     this.getResolvedRequestIDs().add(requestID);
     this.interactionManager.dropWaitingPermission(requestID);
 
-    const state = this.state;
+    const state = this.stateOf(scope);
     if (!state) {
       return [];
     }
@@ -389,10 +431,14 @@ export class PermissionManager {
    * End every prompt of a session whose answer is not on its way, and drop its waiting
    * permissions
    */
-  endSessionPrompts(sessionID: string, outcome: PermissionOutcome): PermissionPromptChange[] {
+  endSessionPrompts(
+    sessionID: string,
+    outcome: PermissionOutcome,
+    scope: string = DEFAULT_INTERACTION_SCOPE,
+  ): PermissionPromptChange[] {
     this.interactionManager.dropWaitingPermissionsForSession(sessionID);
 
-    const state = this.state;
+    const state = this.stateOf(scope);
     if (!state) {
       return [];
     }
@@ -404,14 +450,16 @@ export class PermissionManager {
       )
       .map(([messageId]) => messageId);
 
-    return messageIds.flatMap((messageId) => this.endPrompt(messageId, outcome) ?? []);
+    return messageIds.flatMap(
+      (messageId) => this.endPrompt(messageId, outcome, scope) ?? [],
+    );
   }
 
   /**
    * Open request IDs of the prompts on screen, except prompts whose answer is on its way
    */
-  getSettleableRequestIds(): string[] {
-    const state = this.state;
+  getSettleableRequestIds(scope: string = DEFAULT_INTERACTION_SCOPE): string[] {
+    const state = this.stateOf(scope);
     if (!state) {
       return [];
     }
@@ -424,8 +472,8 @@ export class PermissionManager {
   /**
    * Check whether an OpenCode request ID is already shown or grouped behind a message
    */
-  hasRequest(requestID: string): boolean {
-    for (const requestIds of this.state?.requestIdsByMessageId.values() ?? []) {
+  hasRequest(requestID: string, scope: string = DEFAULT_INTERACTION_SCOPE): boolean {
+    for (const requestIds of this.stateOf(scope)?.requestIdsByMessageId.values() ?? []) {
       if (requestIds.includes(requestID)) {
         return true;
       }
@@ -480,34 +528,35 @@ export class PermissionManager {
     return this.getResolvedRequestIDs().has(requestID);
   }
 
-  getGeneration(): number {
-    return this.interactionManager.getGeneration();
+  getGeneration(scope: string = DEFAULT_INTERACTION_SCOPE): number {
+    return this.interactionManager.getGeneration(scope);
   }
 
   /**
    * Get number of active permission requests
    */
-  getPendingCount(): number {
-    return this.state?.requestsByMessageId.size ?? 0;
+  getPendingCount(scope: string = DEFAULT_INTERACTION_SCOPE): number {
+    return this.stateOf(scope)?.requestsByMessageId.size ?? 0;
   }
 
   /**
    * Check if there are active permission requests
    */
-  isActive(): boolean {
-    return this.getPendingCount() > 0;
+  isActive(scope: string = DEFAULT_INTERACTION_SCOPE): boolean {
+    return this.getPendingCount(scope) > 0;
   }
 
   /**
    * Drop every permission prompt and mark prompts still being sent as stale
    */
-  clear(): void {
+  clear(scope: string = DEFAULT_INTERACTION_SCOPE): void {
     logger.debug(
-      `[PermissionManager] Clearing permission state: pending=${this.getPendingCount()}`,
+      `[PermissionManager] Clearing permission state: scope=${scope}, pending=${this.getPendingCount(scope)}`,
     );
 
-    // Bump first, so a poll released by this clear carries the new generation.
-    this.interactionManager.bumpGeneration();
-    this.interactionManager.clearKind("permission", "permission_cleared");
+    // Bump first, so a poll released by this clear carries the new generation of
+    // its own scope, and no await of another scope is invalidated.
+    this.interactionManager.bumpGeneration(scope);
+    this.interactionManager.clearKind("permission", "permission_cleared", scope);
   }
 }

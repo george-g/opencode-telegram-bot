@@ -9,6 +9,7 @@ import { t } from "../../i18n/index.js";
 import { logger } from "../../utils/logger.js";
 import { replyBusyBlocked } from "../messages/busy-blocked-renderer.js";
 import { buildMessagesListKeyboard, formatMessagesSelectText } from "../menus/message-history-menu.js";
+import { getInteractionScope } from "../middleware/interaction-scope.js";
 
 export type MessagesCommandDeps = Pick<
   AppContainer,
@@ -54,19 +55,22 @@ export async function messagesCommand(
       reply_markup: keyboard,
     });
 
-    deps.interactionManager.start({
-      kind: "custom",
-      expectedInput: "callback",
-      metadata: {
-        flow: "messages",
-        stage: "list",
-        messageId: message.message_id,
-        projectDirectory: currentProject.worktree,
-        sessionId: currentSession.id,
-        messages,
-        page: 0,
+    deps.interactionManager.start(
+      {
+        kind: "custom",
+        expectedInput: "callback",
+        metadata: {
+          flow: "messages",
+          stage: "list",
+          messageId: message.message_id,
+          projectDirectory: currentProject.worktree,
+          sessionId: currentSession.id,
+          messages,
+          page: 0,
+        },
       },
-    });
+      getInteractionScope(ctx),
+    );
   } catch (error) {
     logger.error("[Messages] Error fetching messages list:", error);
     await ctx.reply(t("messages.fetch_error"));

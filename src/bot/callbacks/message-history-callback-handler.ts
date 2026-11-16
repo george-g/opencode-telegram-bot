@@ -16,6 +16,8 @@ import { isForegroundBusy } from "../../app/services/run-control-service.js";
 import { t } from "../../i18n/index.js";
 import { logger } from "../../utils/logger.js";
 import { cancelMenu } from "./feedback.js";
+import { getInteractionScope } from "../middleware/interaction-scope.js";
+import { DEFAULT_INTERACTION_SCOPE } from "../../app/types/interaction-scope.js";
 import { safeBackgroundTask } from "../../utils/safe-background-task.js";
 import { renderAssistantFinalPartsSafe } from "../messages/assistant-rendering.js";
 import {
@@ -177,10 +179,14 @@ function parseMessagesMetadata(state: InteractionState | null): MessagesMetadata
   return null;
 }
 
-function clearMessagesInteraction(deps: MessagesCallbackDeps, reason: string): void {
-  const metadata = parseMessagesMetadata(deps.interactionManager.getSnapshot());
+function clearMessagesInteraction(
+  deps: MessagesCallbackDeps,
+  reason: string,
+  scope: string = DEFAULT_INTERACTION_SCOPE,
+): void {
+  const metadata = parseMessagesMetadata(deps.interactionManager.getSnapshot(scope));
   if (metadata) {
-    deps.interactionManager.clear(reason);
+    deps.interactionManager.clear(reason, scope);
   }
 }
 
@@ -230,7 +236,8 @@ export async function handleMessagesCallback(
     return true;
   }
 
-  const metadata = parseMessagesMetadata(deps.interactionManager.getSnapshot());
+  const scope = getInteractionScope(ctx);
+  const metadata = parseMessagesMetadata(deps.interactionManager.getSnapshot(scope));
   const callbackMessageId = getCallbackMessageId(ctx);
 
   if (!metadata || callbackMessageId === null || metadata.messageId !== callbackMessageId) {
@@ -262,11 +269,11 @@ export async function handleMessagesCallback(
 
         const successText = t("messages.revert_success", { text: selectedMessage.text });
         await ctx.editMessageText(truncateMessageHistoryText(successText, TELEGRAM_MESSAGE_LIMIT));
-        clearMessagesInteraction(deps, "messages_revert_success");
+        clearMessagesInteraction(deps, "messages_revert_success", scope);
       } catch (error) {
         logger.error("[Messages] Error reverting message:", error);
         await ctx.editMessageText(t("messages.revert_error"));
-        clearMessagesInteraction(deps, "messages_revert_error");
+        clearMessagesInteraction(deps, "messages_revert_error", scope);
       }
 
       return true;
@@ -324,7 +331,7 @@ export async function handleMessagesCallback(
 
         const successText = t("messages.fork_success", { text: selectedMessage.text });
         await ctx.editMessageText(truncateMessageHistoryText(successText, TELEGRAM_MESSAGE_LIMIT));
-        clearMessagesInteraction(deps, "messages_fork_success");
+        clearMessagesInteraction(deps, "messages_fork_success", scope);
 
         safeBackgroundTask({
           taskName: "messages.sendLatestAssistantResponse",
@@ -339,7 +346,7 @@ export async function handleMessagesCallback(
       } catch (error) {
         logger.error("[Messages] Error forking session:", error);
         await ctx.editMessageText(t("messages.fork_error"));
-        clearMessagesInteraction(deps, "messages_fork_error");
+        clearMessagesInteraction(deps, "messages_fork_error", scope);
       }
 
       return true;
@@ -362,24 +369,27 @@ export async function handleMessagesCallback(
         reply_markup: buildMessagesListKeyboard(metadata.messages, normalizedPage, pageSize),
       });
 
-      deps.interactionManager.transition({
-        expectedInput: "callback",
-        metadata: {
-          flow: "messages",
-          stage: "list",
-          messageId: metadata.messageId,
-          projectDirectory: metadata.projectDirectory,
-          sessionId: metadata.sessionId,
-          messages: metadata.messages,
-          page: normalizedPage,
+      deps.interactionManager.transition(
+        {
+          expectedInput: "callback",
+          metadata: {
+            flow: "messages",
+            stage: "list",
+            messageId: metadata.messageId,
+            projectDirectory: metadata.projectDirectory,
+            sessionId: metadata.sessionId,
+            messages: metadata.messages,
+            page: normalizedPage,
+          },
         },
-      });
+        scope,
+      );
 
       return true;
     }
 
     if (data === MESSAGES_CALLBACK_CANCEL) {
-      clearMessagesInteraction(deps, "messages_cancelled");
+      clearMessagesInteraction(deps, "messages_cancelled", scope);
       await cancelMenu(ctx);
       return true;
     }
@@ -408,18 +418,21 @@ export async function handleMessagesCallback(
         reply_markup: buildMessagesListKeyboard(metadata.messages, normalizedPage, pageSize),
       });
 
-      deps.interactionManager.transition({
-        expectedInput: "callback",
-        metadata: {
-          flow: "messages",
-          stage: "list",
-          messageId: metadata.messageId,
-          projectDirectory: metadata.projectDirectory,
-          sessionId: metadata.sessionId,
-          messages: metadata.messages,
-          page: normalizedPage,
+      deps.interactionManager.transition(
+        {
+          expectedInput: "callback",
+          metadata: {
+            flow: "messages",
+            stage: "list",
+            messageId: metadata.messageId,
+            projectDirectory: metadata.projectDirectory,
+            sessionId: metadata.sessionId,
+            messages: metadata.messages,
+            page: normalizedPage,
+          },
         },
-      });
+        scope,
+      );
 
       return true;
     }
@@ -441,24 +454,27 @@ export async function handleMessagesCallback(
       reply_markup: buildMessageDetailKeyboard(),
     });
 
-    deps.interactionManager.transition({
-      expectedInput: "callback",
-      metadata: {
-        flow: "messages",
-        stage: "detail",
-        messageId: metadata.messageId,
-        projectDirectory: metadata.projectDirectory,
-        sessionId: metadata.sessionId,
-        messages: metadata.messages,
-        page: metadata.page,
-        selectedIndex: messageIndex,
+    deps.interactionManager.transition(
+      {
+        expectedInput: "callback",
+        metadata: {
+          flow: "messages",
+          stage: "detail",
+          messageId: metadata.messageId,
+          projectDirectory: metadata.projectDirectory,
+          sessionId: metadata.sessionId,
+          messages: metadata.messages,
+          page: metadata.page,
+          selectedIndex: messageIndex,
+        },
       },
-    });
+      scope,
+    );
 
     return true;
   } catch (error) {
     logger.error("[Messages] Error handling messages callback:", error);
-    clearMessagesInteraction(deps, "messages_callback_error");
+    clearMessagesInteraction(deps, "messages_callback_error", scope);
     await ctx.answerCallbackQuery({ text: t("callback.processing_error") }).catch(() => {});
     return true;
   }

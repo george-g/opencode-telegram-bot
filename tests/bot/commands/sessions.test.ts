@@ -235,9 +235,12 @@ beforeEach(() => {
   container = createTestAppContainer();
 });
 
+/** The scope every context in this file resolves to: chat 111 with no forum topic. */
+const SCOPE = "111:no-thread";
+
 describe("bot/commands/sessions", () => {
   beforeEach(() => {
-    container.interactionManager.clear("test_setup");
+    container.interactionManager.clear("test_setup", SCOPE);
     mocked.currentProject = {
       id: "project-1",
       worktree: "/repo",
@@ -313,7 +316,7 @@ describe("bot/commands/sessions", () => {
       kind: "inline",
       expectedInput: "callback",
       metadata: { menuKind: "session", messageId: 456 },
-    });
+    }, SCOPE);
     const search = createCallbackContext("session:search", 456);
     await handleSessionSearchCallback(search, createDeps());
     expect(search.deleteMessage).toHaveBeenCalled();
@@ -358,7 +361,7 @@ describe("bot/commands/sessions", () => {
       kind: "custom",
       expectedInput: "text",
       metadata: { flow: "session-search", stage: "input", token: "test" },
-    });
+    }, SCOPE);
 
     const ctx = { ...createCommandContext(), message: { text: "Session" } } as unknown as Context;
     await handleSessionSearchTextInput(ctx, createDeps());
@@ -392,7 +395,7 @@ describe("bot/commands/sessions", () => {
       kind: "custom",
       expectedInput: "text",
       metadata: { flow: "session-search", stage: "input", token: "test" },
-    });
+    }, SCOPE);
 
     const text = { ...createCommandContext(), message: { text: "Session" } } as unknown as Context;
     await handleSessionSearchTextInput(text, createDeps());
@@ -418,7 +421,7 @@ describe("bot/commands/sessions", () => {
       kind: "custom",
       expectedInput: "text",
       metadata: { flow: "session-search", stage: "input", token: "test" },
-    });
+    }, SCOPE);
     mocked.sessionListMock.mockResolvedValue({ data: [createSession(0)], error: null });
     const text = { ...createCommandContext(), message: { text: "Session" } } as unknown as Context;
     await handleSessionSearchTextInput(text, createDeps());
@@ -427,7 +430,7 @@ describe("bot/commands/sessions", () => {
       kind: "custom",
       expectedInput: "callback",
       metadata: { flow: "model-search", stage: "results", messageId: 456 },
-    });
+    }, SCOPE);
 
     const ctx = createCallbackContext("session:search:result:0", 456);
     await handleSessionSearchCallback(ctx, createDeps());
@@ -445,7 +448,7 @@ describe("bot/commands/sessions", () => {
       kind: "custom",
       expectedInput: "text",
       metadata: { flow: "session-search", stage: "input", token: "test" },
-    });
+    }, SCOPE);
 
     const ctx = { ...createCommandContext(), message: { text: longQuery } } as unknown as Context;
     await handleSessionSearchTextInput(ctx, createDeps());
@@ -454,7 +457,7 @@ describe("bot/commands/sessions", () => {
     expect(ctx.reply).toHaveBeenCalledWith(t("sessions.search.no_results", { query: capped }), {
       reply_markup: expect.anything(),
     });
-    const state = container.interactionManager.getSnapshot();
+    const state = container.interactionManager.getSnapshot(SCOPE);
     expect(state?.metadata.query).toBe(capped);
   });
 
@@ -463,7 +466,7 @@ describe("bot/commands/sessions", () => {
       kind: "custom",
       expectedInput: "text",
       metadata: { flow: "session-search", stage: "input", token: "test" },
-    });
+    }, SCOPE);
     const blank = { ...createCommandContext(), message: { text: "   " } } as unknown as Context;
     await handleSessionSearchTextInput(blank, createDeps());
     expect(mocked.sessionListMock).not.toHaveBeenCalled();
@@ -471,7 +474,7 @@ describe("bot/commands/sessions", () => {
     const text = { ...createCommandContext(), message: { text: "hello" } } as unknown as Context;
     await handleSessionSearchTextInput(text, createDeps());
     expect(text.reply).toHaveBeenCalledWith(t("sessions.fetch_error"));
-    expect(container.interactionManager.getSnapshot()).toBeNull();
+    expect(container.interactionManager.getSnapshot(SCOPE)).toBeNull();
   });
 
   it("leaves out sessions whose folder is gone without letting them take places on the page", async () => {
@@ -531,7 +534,7 @@ describe("bot/commands/sessions", () => {
         menuKind: "session",
         messageId: 456,
       },
-    });
+    }, SCOPE);
 
     const ctx = createCallbackContext("session:session-1", 456);
     await handleSessionSelect(ctx, createDeps());
@@ -571,7 +574,7 @@ describe("bot/commands/sessions", () => {
         menuKind: "session",
         messageId: 456,
       },
-    });
+    }, SCOPE);
 
     const ctx = createCallbackContext("session:page:1", 456);
     const handled = await handleSessionSelect(ctx, createDeps());
@@ -606,7 +609,7 @@ describe("bot/commands/sessions", () => {
         menuKind: "session",
         messageId: 456,
       },
-    });
+    }, SCOPE);
 
     const ctx = createCallbackContext("session:page:2", 456);
     const handled = await handleSessionSelect(ctx, createDeps());
@@ -631,7 +634,7 @@ describe("bot/commands/sessions", () => {
         menuKind: "session",
         messageId: 456,
       },
-    });
+    }, SCOPE);
 
     const ctx = createCallbackContext("session:page:1", 456);
     const handled = await handleSessionSelect(ctx, createDeps());
@@ -658,7 +661,7 @@ describe("bot/commands/sessions", () => {
         menuKind: "session",
         messageId: 456,
       },
-    });
+    }, SCOPE);
 
     const ctx = createCallbackContext("session:session-1", 456);
     const handled = await handleSessionSelect(ctx, createDeps());
@@ -683,7 +686,7 @@ describe("bot/commands/sessions", () => {
         menuKind: "session",
         messageId: 456,
       },
-    });
+    }, SCOPE);
 
     const ctx = createCallbackContext("session:session-1", 456);
     const handled = await handleSessionSelect(ctx, createDeps());
@@ -760,7 +763,7 @@ describe("bot/commands/sessions", () => {
         menuKind: "session",
         messageId: 456,
       },
-    });
+    }, SCOPE);
 
     const ctx = createCallbackContext("session:session-1", 456);
     await handleSessionSelect(ctx, createDeps());
@@ -827,7 +830,7 @@ describe("bot/commands/sessions", () => {
         menuKind: "session",
         messageId: 456,
       },
-    });
+    }, SCOPE);
 
     const actualSafeBackgroundTask = await vi.importActual<
       typeof import("../../../src/utils/safe-background-task.js")
@@ -888,7 +891,7 @@ describe("bot/commands/sessions", () => {
         menuKind: "session",
         messageId: 456,
       },
-    });
+    }, SCOPE);
 
     const actualSafeBackgroundTask = await vi.importActual<
       typeof import("../../../src/utils/safe-background-task.js")
@@ -947,7 +950,7 @@ describe("bot/commands/sessions", () => {
         menuKind: "session",
         messageId: 456,
       },
-    });
+    }, SCOPE);
 
     const actualSafeBackgroundTask = await vi.importActual<
       typeof import("../../../src/utils/safe-background-task.js")
@@ -987,7 +990,7 @@ describe("bot/commands/sessions", () => {
         menuKind: "session",
         messageId: 456,
       },
-    });
+    }, SCOPE);
 
     const ctx = createCallbackContext("session:session-1", 456);
     await handleSessionSelect(ctx, createDeps());
@@ -1035,7 +1038,7 @@ describe("bot/commands/sessions", () => {
         menuKind: "session",
         messageId: 456,
       },
-    });
+    }, SCOPE);
 
     const ctx = createCallbackContext("session:session-1", 456);
     await handleSessionSelect(ctx, createDeps());
@@ -1072,7 +1075,7 @@ describe("bot/commands/sessions", () => {
         menuKind: "session",
         messageId: 456,
       },
-    });
+    }, SCOPE);
 
     const ctx = createCallbackContext("session:session-1", 456);
     await handleSessionSelect(ctx, createDeps());
@@ -1095,7 +1098,7 @@ describe("bot/commands/sessions", () => {
         menuKind: "session",
         messageId: 456,
       },
-    });
+    }, SCOPE);
 
     await handleSessionSelect(createCallbackContext("session:session-1", 456), createDeps());
 
@@ -1115,7 +1118,7 @@ describe("bot/commands/sessions", () => {
         menuKind: "session",
         messageId: 456,
       },
-    });
+    }, SCOPE);
 
     await handleSessionSelect(createCallbackContext("session:session-1", 456), createDeps());
 
@@ -1136,7 +1139,7 @@ describe("bot/commands/sessions", () => {
         kind: "inline",
         expectedInput: "callback",
         metadata: { menuKind: "session", messageId: 456 },
-      });
+      }, SCOPE);
 
       await handleSessionSelect(createCallbackContext("session:session-1", 456), createDeps());
     }
@@ -1194,7 +1197,7 @@ describe("bot/commands/sessions", () => {
         menuKind: "session",
         messageId: 456,
       },
-    });
+    }, SCOPE);
 
     const ctx = createCallbackContext("session:session-1", 456);
     const handled = await handleSessionSelect(ctx, createDeps());
@@ -1486,7 +1489,7 @@ describe("bot/commands/sessions", () => {
         menuKind: "model",
         messageId: 999,
       },
-    });
+    }, SCOPE);
 
     const ctx = createCallbackContext("background-session:session-1", 456);
     const handled = await handleBackgroundSessionOpen(ctx, createDeps());
@@ -1546,7 +1549,7 @@ describe("bot/commands/sessions", () => {
     startInteractionForTest(container.interactionManager, {
       kind: "question",
       expectedInput: "callback",
-    });
+    }, SCOPE);
 
     const ctx = createCallbackContext("background-session:session-1", 456);
     const handled = await handleBackgroundSessionOpen(ctx, createDeps());

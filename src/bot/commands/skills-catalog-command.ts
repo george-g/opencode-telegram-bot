@@ -8,6 +8,7 @@ import { logger } from "../../utils/logger.js";
 import { isForegroundBusy } from "../../app/services/run-control-service.js";
 import { replyBusyBlocked } from "../messages/busy-blocked-renderer.js";
 import { buildSkillsListKeyboard, formatSkillsSelectText } from "../menus/skills-catalog-menu.js";
+import { getInteractionScope } from "../middleware/interaction-scope.js";
 
 export type SkillsCommandDeps = Pick<
   AppContainer,
@@ -42,18 +43,21 @@ export async function skillsCommand(
       reply_markup: keyboard,
     });
 
-    deps.interactionManager.start({
-      kind: "custom",
-      expectedInput: "callback",
-      metadata: {
-        flow: "skills",
-        stage: "list",
-        messageId: message.message_id,
-        projectDirectory: currentProject.worktree,
-        skills,
-        page: 0,
+    deps.interactionManager.start(
+      {
+        kind: "custom",
+        expectedInput: "callback",
+        metadata: {
+          flow: "skills",
+          stage: "list",
+          messageId: message.message_id,
+          projectDirectory: currentProject.worktree,
+          skills,
+          page: 0,
+        },
       },
-    });
+      getInteractionScope(ctx),
+    );
   } catch (error) {
     logger.error("[Skills] Error fetching skills list:", error);
     await ctx.reply(t("skills.fetch_error"));

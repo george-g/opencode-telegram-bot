@@ -12,6 +12,9 @@ vi.mock("../../../src/app/services/message-history-service.js", () => ({ loadLat
 
 import { handleContextButtonPress } from "../../../src/bot/menus/context-control-menu.js";
 
+/** The scope the test contexts resolve to: no chat named, so chat 0 and no thread. */
+const SCOPE = "0:no-thread";
+
 describe("context details menu", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -36,7 +39,7 @@ describe("context details menu", () => {
     const buttons = (options?.reply_markup as InlineKeyboard).inline_keyboard.flat();
     expect(buttons.map((button) => button.text)).toEqual([t("context.button.details_compact"), t("context.button.close")]);
     expect(buttons.map((button) => "callback_data" in button && button.callback_data)).toEqual(["compact:details", "inline:cancel:context"]);
-    expect(deps.interactionManager.getSnapshot()?.metadata.stage).toBe("details");
+    expect(deps.interactionManager.getSnapshot(SCOPE)?.metadata.stage).toBe("details");
   });
 
   it("shows only the window without a previous assistant message", async () => {

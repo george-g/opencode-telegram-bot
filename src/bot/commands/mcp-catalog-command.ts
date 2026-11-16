@@ -5,6 +5,7 @@ import { getCurrentProject } from "../../app/stores/settings-store.js";
 import { t } from "../../i18n/index.js";
 import { logger } from "../../utils/logger.js";
 import { buildMcpsListKeyboard } from "../menus/mcp-catalog-menu.js";
+import { getInteractionScope } from "../middleware/interaction-scope.js";
 
 export type McpsCommandDeps = Pick<AppContainer, "interactionManager">;
 
@@ -30,17 +31,20 @@ export async function mcpsCommand(
       reply_markup: keyboard,
     });
 
-    deps.interactionManager.start({
-      kind: "custom",
-      expectedInput: "callback",
-      metadata: {
-        flow: "mcps",
-        stage: "list",
-        messageId: message.message_id,
-        projectDirectory: currentProject.worktree,
-        servers,
+    deps.interactionManager.start(
+      {
+        kind: "custom",
+        expectedInput: "callback",
+        metadata: {
+          flow: "mcps",
+          stage: "list",
+          messageId: message.message_id,
+          projectDirectory: currentProject.worktree,
+          servers,
+        },
       },
-    });
+      getInteractionScope(ctx),
+    );
   } catch (error) {
     logger.error("[Mcps] Error fetching MCP servers list:", error);
     await ctx.reply(t("mcps.fetch_error"));

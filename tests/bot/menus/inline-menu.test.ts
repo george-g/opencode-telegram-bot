@@ -24,6 +24,7 @@ function createReplyContext(messageId: number = 1): Context {
 
 function createCallbackContext(data: string, messageId: number): Context {
   return {
+    chat: { id: 100 },
     callbackQuery: {
       data,
       message: {
@@ -49,9 +50,12 @@ beforeEach(() => {
   deps = createTestAppContainer();
 });
 
+/** The scope every context in this file resolves to: chat 100 with no forum topic. */
+const SCOPE = "100:no-thread";
+
 describe("bot/menus/inline-menu", () => {
   beforeEach(() => {
-    deps.interactionManager.clear("test_setup");
+    deps.interactionManager.clear("test_setup", SCOPE);
   });
 
   it("adds unified cancel button to inline keyboard", () => {
@@ -112,7 +116,7 @@ describe("bot/menus/inline-menu", () => {
 
     expect(getCallbackData(defined(lastRow[0]))).toBe("inline:cancel:model");
 
-    const state = deps.interactionManager.getSnapshot();
+    const state = deps.interactionManager.getSnapshot(SCOPE);
     expect(state?.kind).toBe("inline");
     expect(state?.expectedInput).toBe("callback");
     expect(state?.metadata.menuKind).toBe("model");
@@ -146,7 +150,7 @@ describe("bot/menus/inline-menu", () => {
         menuKind: "session",
         messageId: 99,
       },
-    });
+    }, SCOPE);
 
     const ctx = createCallbackContext("session:abc", 99);
 
@@ -164,7 +168,7 @@ describe("bot/menus/inline-menu", () => {
         menuKind: "project",
         messageId: 10,
       },
-    });
+    }, SCOPE);
 
     const ctx = createCallbackContext("session:abc", 10);
 
@@ -185,14 +189,14 @@ describe("bot/menus/inline-menu", () => {
         menuKind: "variant",
         messageId: 777,
       },
-    });
+    }, SCOPE);
 
     const ctx = createCallbackContext("inline:cancel:variant", 777);
 
     const handled = await handleInlineMenuCancel(ctx, deps);
 
     expect(handled).toBe(true);
-    expect(deps.interactionManager.getSnapshot()).toBeNull();
+    expect(deps.interactionManager.getSnapshot(SCOPE)).toBeNull();
     expect(ctx.answerCallbackQuery).toHaveBeenCalledWith({ text: t("common.cancelled") });
     expect(ctx.deleteMessage).toHaveBeenCalledTimes(1);
   });
@@ -205,13 +209,13 @@ describe("bot/menus/inline-menu", () => {
         menuKind: "context",
         messageId: 555,
       },
-    });
+    }, SCOPE);
 
     const ctx = createCallbackContext("compact:cancel", 555);
 
     const handled = await handleInlineMenuCancel(ctx, deps);
 
     expect(handled).toBe(true);
-    expect(deps.interactionManager.getSnapshot()).toBeNull();
+    expect(deps.interactionManager.getSnapshot(SCOPE)).toBeNull();
   });
 });

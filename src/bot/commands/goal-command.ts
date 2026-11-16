@@ -17,6 +17,7 @@ import { resolveGoalButton, type GoalButtonAction } from "../keyboards/goal-butt
 import { replyBusyBlocked } from "../messages/busy-blocked-renderer.js";
 import { sendGoalText } from "../messages/goal-delivery.js";
 import { convertRichMessage, getIncomingPrompt } from "../handlers/rich-message-handler.js";
+import { getInteractionScope } from "../middleware/interaction-scope.js";
 
 export type GoalCommandDeps = Pick<
   AppContainer,
@@ -44,8 +45,9 @@ export async function goalCommand(
   ctx: CommandContext<Context>,
   deps: GoalCommandDeps,
 ): Promise<void> {
+  const scope = getInteractionScope(ctx);
   try {
-    if (deps.interactionManager.getSnapshot()) {
+    if (deps.interactionManager.getSnapshot(scope)) {
       await ctx.reply(t("interaction.blocked.finish_current"));
       return;
     }
@@ -61,7 +63,7 @@ export async function goalCommand(
     }
     deps.goalService.follow(session.id);
     const result = await deps.goalService.refresh(session.id, session.directory, false);
-    if (getCurrentSession()?.id !== session.id || deps.interactionManager.getSnapshot()) {
+    if (getCurrentSession()?.id !== session.id || deps.interactionManager.getSnapshot(scope)) {
       await replyGoalText(ctx, deps, t("inline.inactive_callback"));
       return;
     }
@@ -109,42 +111,50 @@ async function openGoalInput(
   session: { id: string; directory: string },
 ): Promise<void> {
   const requestId = randomUUID();
-  deps.interactionManager.start({
-    kind: "custom",
-    expectedInput: "text",
-    metadata: {
-      flow: "goal",
-      stage: "objective",
-      requestId,
-      sessionId: session.id,
-      directory: session.directory,
+  const scope = getInteractionScope(ctx);
+  deps.interactionManager.start(
+    {
+      kind: "custom",
+      expectedInput: "text",
+      metadata: {
+        flow: "goal",
+        stage: "objective",
+        requestId,
+        sessionId: session.id,
+        directory: session.directory,
+      },
     },
-  });
+    scope,
+  );
   try {
     const message = await ctx.reply(t("goal.input.prompt"), {
       reply_markup: new InlineKeyboard().text(t("goal.confirm.cancel"), goalCancelData()),
     });
-    if (deps.interactionManager.getSnapshot()?.metadata.requestId === requestId) {
-      deps.interactionManager.transition({
-        metadata: {
-          ...deps.interactionManager.getSnapshot()!.metadata,
-          messageId: message.message_id,
+    if (deps.interactionManager.getSnapshot(scope)?.metadata.requestId === requestId) {
+      deps.interactionManager.transition(
+        {
+          metadata: {
+            ...deps.interactionManager.getSnapshot(scope)!.metadata,
+            messageId: message.message_id,
+          },
         },
-      });
+        scope,
+      );
     } else {
       await ctx.api
         .editMessageText(ctx.chat!.id, message.message_id, t("inline.inactive_callback"))
         .catch(() => {});
     }
   } catch (error) {
-    if (deps.interactionManager.getSnapshot()?.metadata.requestId === requestId)
-      deps.interactionManager.clear("goal_input_failed");
+    if (deps.interactionManager.getSnapshot(scope)?.metadata.requestId === requestId)
+      deps.interactionManager.clear("goal_input_failed", scope);
     throw error;
   }
 }
 
 export async function handleGoalTextInput(ctx: Context, deps: GoalCommandDeps): Promise<boolean> {
-  const state = deps.interactionManager.getSnapshot();
+  const scope = getInteractionScope(ctx);
+  const state = deps.interactionManager.getSnapshot(scope);
   if (state?.metadata.flow !== "goal" || state.metadata.stage !== "objective") return false;
   const message = ctx.message;
   const richMedia =
@@ -171,10 +181,13 @@ export async function handleGoalTextInput(ctx: Context, deps: GoalCommandDeps): 
     );
     return true;
   }
-  deps.interactionManager.transition({
-    expectedInput: "callback",
-    metadata: { ...state.metadata, stage: "validating" },
-  });
+  deps.interactionManager.transition(
+    {
+      expectedInput: "callback",
+      metadata: { ...state.metadata, stage: "validating" },
+    },
+    scope,
+  );
   try {
     const session = getCurrentSession();
     if (
@@ -183,15 +196,18 @@ export async function handleGoalTextInput(ctx: Context, deps: GoalCommandDeps): 
       session.directory !== state.metadata.directory ||
       isForegroundBusy(deps)
     ) {
-      deps.interactionManager.clear("goal_input_inactive");
+      deps.interactionManager.clear("goal_input_inactive", scope);
       await replyGoalText(ctx, deps, t("inline.inactive_callback"));
       return true;
     }
     const current = await deps.goalService.read(session.id, session.directory);
-    if (deps.interactionManager.getSnapshot()?.metadata.requestId !== state.metadata.requestId)
+    if (deps.interactionManager.getSnapshot(scope)?.metadata.requestId !== state.metadata.requestId)
       return true;
     if (current.kind === "error" || current.kind === "unsupported") {
-      deps.interactionManager.transition({ expectedInput: "text", metadata: state.metadata });
+      deps.interactionManager.transition(
+        { expectedInput: "text", metadata: state.metadata },
+        scope,
+      );
       await ctx.reply(t(current.kind === "unsupported" ? "goal.unsupported" : "goal.read_error"));
       return true;
     }
@@ -200,15 +216,18 @@ export async function handleGoalTextInput(ctx: Context, deps: GoalCommandDeps): 
       getCurrentSession()?.id !== session.id ||
       isForegroundBusy(deps)
     ) {
-      deps.interactionManager.clear("goal_input_inactive");
+      deps.interactionManager.clear("goal_input_inactive", scope);
       await replyGoalText(ctx, deps, t("inline.inactive_callback"));
       return true;
     }
     await openGoalConfirmation(ctx, deps, session, "start", objective.text, null);
   } catch (error) {
     logger.error("[Goal] Objective input failed", error);
-    if (deps.interactionManager.getSnapshot()?.metadata.requestId === state.metadata.requestId) {
-      deps.interactionManager.transition({ expectedInput: "text", metadata: state.metadata });
+    if (deps.interactionManager.getSnapshot(scope)?.metadata.requestId === state.metadata.requestId) {
+      deps.interactionManager.transition(
+        { expectedInput: "text", metadata: state.metadata },
+        scope,
+      );
     }
     await replyGoalText(ctx, deps, t("goal.action_error"));
   }
@@ -246,8 +265,9 @@ export async function handleGoalAction(
   action: GoalButtonAction,
   token: string,
 ): Promise<void> {
+  const scope = getInteractionScope(ctx);
   try {
-    if (deps.interactionManager.getSnapshot()) {
+    if (deps.interactionManager.getSnapshot(scope)) {
       await ctx.reply(t("interaction.blocked.finish_current"));
       return;
     }
@@ -277,7 +297,7 @@ export async function handleGoalAction(
     }
     if (
       getCurrentSession()?.id !== session.id ||
-      deps.interactionManager.getSnapshot() ||
+      deps.interactionManager.getSnapshot(scope) ||
       token !== deps.goalManager.getControlToken() ||
       current.kind !== "goal" ||
       current.goal.id !== shown.goal.id
@@ -374,11 +394,15 @@ async function openGoalConfirmation(
   goal: GoalState | null,
 ): Promise<void> {
   const requestId = randomUUID();
-  deps.interactionManager.start({
-    kind: "custom",
-    expectedInput: "callback",
-    metadata: { flow: "goal", stage: "opening", requestId },
-  });
+  const scope = getInteractionScope(ctx);
+  deps.interactionManager.start(
+    {
+      kind: "custom",
+      expectedInput: "callback",
+      metadata: { flow: "goal", stage: "opening", requestId },
+    },
+    scope,
+  );
   try {
     const sent = await ctx.reply(
       formatGoalConfirmation({ action, objective, ...(goal ? { maxRounds: goal.maxRounds } : {}) }),
@@ -389,30 +413,33 @@ async function openGoalConfirmation(
         link_preview_options: { is_disabled: true },
       },
     );
-    if (deps.interactionManager.getSnapshot()?.metadata.requestId !== requestId) {
+    if (deps.interactionManager.getSnapshot(scope)?.metadata.requestId !== requestId) {
       await ctx.api
         .editMessageText(ctx.chat!.id, sent.message_id, t("inline.inactive_callback"))
         .catch(() => {});
       return;
     }
-    deps.interactionManager.transition({
-      metadata: {
-        flow: "goal",
-        stage: "confirm",
-        requestId,
-        messageId: sent.message_id,
-        sessionId: session.id,
-        directory: session.directory,
-        goalId: goal?.id ?? null,
-        shownGoal: goal,
-        action,
-        objective,
-        controlToken: deps.goalManager.getControlToken(),
+    deps.interactionManager.transition(
+      {
+        metadata: {
+          flow: "goal",
+          stage: "confirm",
+          requestId,
+          messageId: sent.message_id,
+          sessionId: session.id,
+          directory: session.directory,
+          goalId: goal?.id ?? null,
+          shownGoal: goal,
+          action,
+          objective,
+          controlToken: deps.goalManager.getControlToken(),
+        },
       },
-    });
+      scope,
+    );
   } catch (error) {
-    if (deps.interactionManager.getSnapshot()?.metadata.requestId === requestId)
-      deps.interactionManager.clear("goal_confirmation_failed");
+    if (deps.interactionManager.getSnapshot(scope)?.metadata.requestId === requestId)
+      deps.interactionManager.clear("goal_confirmation_failed", scope);
     throw error;
   }
 }

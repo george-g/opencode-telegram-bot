@@ -8,6 +8,7 @@ import { logger } from "../../utils/logger.js";
 import { t } from "../../i18n/index.js";
 import { isRecord } from "../../utils/type-guards.js";
 import { alert, cancelMenu } from "./feedback.js";
+import { getInteractionScope } from "../middleware/interaction-scope.js";
 import {
   goalCancelData,
   goalConfirmData,
@@ -31,6 +32,7 @@ interface GoalConfirmation {
 
 export async function handleGoalCallback(ctx: Context, deps: GoalCallbackDeps): Promise<boolean> {
   const data = ctx.callbackQuery?.data;
+  const scope = getInteractionScope(ctx);
   if (data?.startsWith("goal:delete:")) {
     await ctx.answerCallbackQuery();
     await handleGoalAction(ctx, deps, "clear", data.slice("goal:delete:".length));
@@ -41,13 +43,13 @@ export async function handleGoalCallback(ctx: Context, deps: GoalCallbackDeps): 
   }
 
   const messageId = callbackMessageId(ctx);
-  const metadata = deps.interactionManager.getSnapshot()?.metadata;
+  const metadata = deps.interactionManager.getSnapshot(scope)?.metadata;
   if (data === goalCancelData() && metadata?.flow === "goal" && metadata.messageId === messageId) {
-    deps.interactionManager.clear("goal_cancelled");
+    deps.interactionManager.clear("goal_cancelled", scope);
     await cancelMenu(ctx);
     return true;
   }
-  const confirmation = readConfirmation(deps);
+  const confirmation = readConfirmation(deps, scope);
   if (!confirmation || messageId === null || confirmation.messageId !== messageId) {
     await alert(ctx, "inline.inactive_callback");
     await ctx.editMessageText(t("inline.inactive_callback")).catch(() => {});
@@ -55,7 +57,7 @@ export async function handleGoalCallback(ctx: Context, deps: GoalCallbackDeps): 
   }
 
   if (isForegroundBusy(deps) || getCurrentSession()?.id !== confirmation.sessionId) {
-    deps.interactionManager.clear("goal_invalidated");
+    deps.interactionManager.clear("goal_invalidated", scope);
     await alert(ctx, "inline.inactive_callback");
     await ctx.editMessageText(t("inline.inactive_callback")).catch(() => {});
     return true;
@@ -83,7 +85,7 @@ export async function handleGoalCallback(ctx: Context, deps: GoalCallbackDeps): 
     return true;
   }
   const current = await deps.goalService.read(confirmation.sessionId, confirmation.directory);
-  const stillActive = readConfirmation(deps);
+  const stillActive = readConfirmation(deps, scope);
   const session = getCurrentSession();
   if (
     !stillActive ||
@@ -95,7 +97,7 @@ export async function handleGoalCallback(ctx: Context, deps: GoalCallbackDeps): 
     isForegroundBusy(deps)
   ) {
     if (stillActive?.messageId === confirmation.messageId)
-      deps.interactionManager.clear("goal_invalidated");
+      deps.interactionManager.clear("goal_invalidated", scope);
     await alert(ctx, "inline.inactive_callback");
     await ctx.editMessageText(t("inline.inactive_callback")).catch(() => {});
     return true;
@@ -105,7 +107,7 @@ export async function handleGoalCallback(ctx: Context, deps: GoalCallbackDeps): 
     return true;
   }
   if (current.kind === "unsupported" || !matchesShownGoal(confirmation, current)) {
-    deps.interactionManager.clear("goal_invalidated");
+    deps.interactionManager.clear("goal_invalidated", scope);
     await alert(
       ctx,
       current.kind === "unsupported" ? "goal.unsupported" : "inline.inactive_callback",
@@ -117,12 +119,12 @@ export async function handleGoalCallback(ctx: Context, deps: GoalCallbackDeps): 
     confirmation.action === "resume" &&
     !deps.goalManager.claimControl(confirmation.controlToken)
   ) {
-    deps.interactionManager.clear("goal_invalidated");
+    deps.interactionManager.clear("goal_invalidated", scope);
     await alert(ctx, "inline.inactive_callback");
     return true;
   }
 
-  deps.interactionManager.clear("goal_confirmed");
+  deps.interactionManager.clear("goal_confirmed", scope);
   await ctx.answerCallbackQuery();
   await ctx.deleteMessage().catch(() => {});
 
@@ -194,8 +196,8 @@ function matchesShownGoal(
   return true;
 }
 
-function readConfirmation(deps: GoalCallbackDeps): GoalConfirmation | null {
-  const metadata = deps.interactionManager.getSnapshot()?.metadata;
+function readConfirmation(deps: GoalCallbackDeps, scope: string): GoalConfirmation | null {
+  const metadata = deps.interactionManager.getSnapshot(scope)?.metadata;
   if (!isRecord(metadata) || metadata.flow !== "goal" || metadata.stage !== "confirm") {
     return null;
   }

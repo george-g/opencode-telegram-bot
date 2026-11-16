@@ -170,6 +170,9 @@ async function settle(): Promise<void> {
   }
 }
 
+/** The scope the unbound chat 42 of these tests resolves to: no forum topic. */
+const SCOPE = "42:no-thread";
+
 describe("bot/services/event-subscription-service lost run", () => {
   let tempHome = "";
   let service: BotEventSubscriptionService | null = null;
@@ -319,9 +322,10 @@ describe("bot/services/event-subscription-service lost run", () => {
       [{ question: "Red or blue?", header: "Color", options: [{ label: "Red", description: "" }] }],
       "form-1",
       "session-1",
+      SCOPE,
     );
-    container.questionManager.addMessageId(700);
-    container.questionManager.setActiveMessageId(700);
+    container.questionManager.addMessageId(700, SCOPE);
+    container.questionManager.setActiveMessageId(700, SCOPE);
 
     const ending = service!.endRunLostWithServer("opencode_restarted");
     await settle();
@@ -330,7 +334,7 @@ describe("bot/services/event-subscription-service lost run", () => {
     expect(api.deleteMessage).not.toHaveBeenCalledWith(42, 700);
     const pollEdit = api.editMessageText.mock.calls.find((call) => call[1] === 700);
     expect(JSON.stringify(pollEdit)).toContain(t("question.not_answered"));
-    expect(container.questionManager.isActive()).toBe(false);
+    expect(container.questionManager.isActive(SCOPE)).toBe(false);
   });
 
   it("ends a running subagent card interrupted, timed to when the server went away", async () => {

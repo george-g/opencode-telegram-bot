@@ -4,6 +4,10 @@ import { config } from "../../config.js";
 import { opencodeServerVersion } from "../../opencode/client.js";
 import { getCurrentSession } from "../../app/services/session-service.js";
 import { getTopicBindingBySession } from "../../app/stores/topic-binding-store.js";
+import {
+  DEFAULT_INTERACTION_SCOPE,
+  interactionScopeFromDestination,
+} from "../../app/types/interaction-scope.js";
 import { restorePendingInteractionsAfterReconnect } from "../../app/services/attach-service.js";
 import { reconcileInboxPrompts } from "../../app/services/prompt-inbox-service.js";
 import { logger } from "../../utils/logger.js";
@@ -201,9 +205,12 @@ class EventSubscriptionService implements BotEventSubscriptionService {
     const { deps, runtime } = this;
     const destination = this.getChatDestination();
     // First: failing the poll's question call below would delete the poll, as after /abort.
+    const destinationScope = destination
+      ? interactionScopeFromDestination(destination)
+      : DEFAULT_INTERACTION_SCOPE;
     const pollClosed =
-      destination && deps.questionManager.isActive()
-        ? closeQuestionNotAnswered(destination.api, destination.chatId, deps)
+      destination && deps.questionManager.isActive(destinationScope)
+        ? closeQuestionNotAnswered(destination.api, destination.chatId, deps, destinationScope)
         : Promise.resolve();
 
     // The server took every session's background commands with it.

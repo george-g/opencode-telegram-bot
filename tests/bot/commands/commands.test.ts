@@ -16,6 +16,7 @@ import {
 import { t } from "../../../src/i18n/index.js";
 import { defined } from "../../helpers/defined.js";
 import { logger } from "../../../src/utils/logger.js";
+import { resolveInteractionGuardDecision } from "../../../src/bot/middleware/interaction-guard-decision.js";
 import { createTestAppContainer } from "../../helpers/app-container.js";
 import type { AppContainer } from "../../../src/app/bootstrap/app-container.js";
 import { startInteractionForTest } from "../../helpers/interaction.js";
@@ -106,9 +107,13 @@ vi.mock("../../../src/app/services/attach-service.js", () => ({
   markAttachedSessionIdle: vi.fn().mockResolvedValue(undefined),
 }));
 
-function createCommandContext(messageId: number): Context {
+function createCommandContext(messageId: number, threadId?: number): Context {
   return {
     chat: { id: 777 },
+    message: {
+      message_id: messageId,
+      ...(threadId === undefined ? {} : { message_thread_id: threadId }),
+    } as Context["message"],
     reply: vi.fn().mockResolvedValue({ message_id: messageId }),
     answerCallbackQuery: vi.fn().mockResolvedValue(undefined),
     deleteMessage: vi.fn().mockResolvedValue(undefined),
@@ -155,6 +160,18 @@ function createTextContext(text: string): Context {
   } as unknown as Context;
 }
 
+/** A command text update in the given forum topic of chat 777. */
+function textInTopic(threadId: number, text: string): Context {
+  return {
+    chat: { id: 777 },
+    message: {
+      message_id: 1,
+      text,
+      message_thread_id: threadId,
+    } as Context["message"],
+  } as unknown as Context;
+}
+
 function createDeps(): ExecuteCommandDeps {
   return {
     ...container,
@@ -190,6 +207,12 @@ function getScheduledBackgroundTask(): {
 }
 
 let container: AppContainer;
+
+/** The scope every context in this file resolves to: chat 777 with no forum topic. */
+const SCOPE = "777:no-thread";
+/** A numbered forum topic of the same chat, for the command-menu scope test. */
+const TOPIC_A = 42;
+const TOPIC_B = 43;
 
 beforeEach(() => {
   container = createTestAppContainer();
@@ -266,12 +289,39 @@ describe("bot/commands/commands", () => {
     expect(options.reply_markup.inline_keyboard[2]?.[0]?.callback_data).toBe("commands:select:1");
     expect(options.reply_markup.inline_keyboard[3]?.[0]?.callback_data).toBe("commands:cancel");
 
-    const state = container.interactionManager.getSnapshot();
+    const state = container.interactionManager.getSnapshot(SCOPE);
     expect(state?.kind).toBe("custom");
     expect(state?.expectedInput).toBe("callback");
     expect(state?.metadata.flow).toBe("commands");
     expect(state?.metadata.stage).toBe("list");
     expect(state?.metadata.messageId).toBe(123);
+  });
+
+  it("blocks the topic that opened the menu by a command and not another topic", async () => {
+    mocked.commandListMock.mockResolvedValue({
+      data: [{ name: "init", description: "create/update AGENTS.md", source: "command" }],
+      error: null,
+    });
+
+    const ctx = createCommandContext(321, TOPIC_A);
+    await commandsCommand(ctx as never, createDeps());
+
+    // The menu belongs to the topic of the command, not to the default scope.
+    expect(container.interactionManager.getSnapshot(`777:${TOPIC_A}`)?.kind).toBe("custom");
+    expect(container.interactionManager.getSnapshot(SCOPE)).toBeNull();
+
+    const ownTopic = resolveInteractionGuardDecision(
+      textInTopic(TOPIC_A, "/new"),
+      container,
+    );
+    const otherTopic = resolveInteractionGuardDecision(
+      textInTopic(TOPIC_B, "/new"),
+      container,
+    );
+
+    expect(ownTopic.allow).toBe(false);
+    expect(otherTopic.allow).toBe(true);
+    expect(otherTopic.state).toBeNull();
   });
 
   it("transitions to confirmation step after selecting command", async () => {
@@ -288,7 +338,7 @@ describe("bot/commands/commands", () => {
           { name: "poem", description: "write a poem" },
         ],
       },
-    });
+    }, SCOPE);
 
     const callbackCtx = createCallbackContext("commands:select:1", 321);
     const handled = await handleCommandsCallback(callbackCtx, createDeps());
@@ -300,7 +350,7 @@ describe("bot/commands/commands", () => {
       expect.objectContaining({ reply_markup: expect.any(Object) }),
     );
 
-    const state = container.interactionManager.getSnapshot();
+    const state = container.interactionManager.getSnapshot(SCOPE);
     expect(state?.kind).toBe("custom");
     expect(state?.expectedInput).toBe("mixed");
     expect(state?.metadata.stage).toBe("confirm");
@@ -318,7 +368,7 @@ describe("bot/commands/commands", () => {
         projectDirectory: "D:\\Projects\\Repo",
         commandName: "poem",
       },
-    });
+    }, SCOPE);
 
     const ctx = createCallbackContext("commands:execute", 400);
     const handled = await handleCommandsCallback(ctx, createDeps());
@@ -326,7 +376,7 @@ describe("bot/commands/commands", () => {
     await backgroundTask.task();
 
     expect(handled).toBe(true);
-    expect(container.interactionManager.getSnapshot()).toBeNull();
+    expect(container.interactionManager.getSnapshot(SCOPE)).toBeNull();
     expect(ctx.deleteMessage).toHaveBeenCalledTimes(1);
     expect(ctx.reply).toHaveBeenCalledWith(`${t("commands.executing_prefix")}\n/poem`, {
       entities: [{ type: "code", offset: t("commands.executing_prefix").length + 1, length: 5 }],
@@ -371,7 +421,7 @@ describe("bot/commands/commands", () => {
         projectDirectory: "D:\\Projects\\Repo",
         commandName: "poem",
       },
-    });
+    }, SCOPE);
 
     const ctx = createCallbackContext("commands:execute", 400);
     await handleCommandsCallback(ctx, createDeps());
@@ -397,7 +447,7 @@ describe("bot/commands/commands", () => {
         projectDirectory: "D:\\Projects\\Repo",
         commandName: "poem",
       },
-    });
+    }, SCOPE);
 
     const ctx = createTextContext("about spring");
     const handled = await handleCommandTextArguments(ctx, createDeps());
@@ -405,7 +455,7 @@ describe("bot/commands/commands", () => {
     await backgroundTask.task();
 
     expect(handled).toBe(true);
-    expect(container.interactionManager.getSnapshot()).toBeNull();
+    expect(container.interactionManager.getSnapshot(SCOPE)).toBeNull();
     expect(ctx.api.deleteMessage).toHaveBeenCalledWith(777, 500);
     expect(ctx.reply).toHaveBeenCalledWith(
       `${t("commands.executing_prefix")}\n/poem about spring`,
@@ -439,7 +489,7 @@ describe("bot/commands/commands", () => {
         projectDirectory: "D:\\Projects\\Repo",
         commandName: "poem",
       },
-    });
+    }, SCOPE);
 
     const ctx = createCallbackContext("commands:execute", 400);
     const handled = await handleCommandsCallback(ctx, createDeps());
@@ -461,7 +511,7 @@ describe("bot/commands/commands", () => {
         projectDirectory: "D:\\Projects\\Repo",
         commandName: "poem",
       },
-    });
+    }, SCOPE);
 
     const ctx = createCallbackContext("commands:execute", 400);
     const handled = await handleCommandsCallback(ctx, createDeps());
@@ -488,7 +538,7 @@ describe("bot/commands/commands", () => {
         projectDirectory: "D:\\Projects\\Repo",
         commandName: "poem",
       },
-    });
+    }, SCOPE);
 
     const ctx = createCallbackContext("commands:execute", 400);
     const errorSpy = vi.spyOn(logger, "error").mockImplementation(() => {});
@@ -516,7 +566,7 @@ describe("bot/commands/commands", () => {
         projectDirectory: "D:\\Projects\\Repo",
         commandName: "poem",
       },
-    });
+    }, SCOPE);
 
     const ctx = createCallbackContext("commands:execute", 400);
     const errorSpy = vi.spyOn(logger, "error").mockImplementation(() => {});
@@ -549,7 +599,7 @@ describe("bot/commands/commands", () => {
         projectDirectory: "D:\\Projects\\Repo",
         commandName: "poem",
       },
-    });
+    }, SCOPE);
 
     const ctx = createCallbackContext("commands:execute", 400);
     const handled = await handleCommandsCallback(ctx, createDeps());
@@ -575,7 +625,7 @@ describe("bot/commands/commands", () => {
         projectDirectory: "D:\\Projects\\Repo",
         commandName: "poem",
       },
-    });
+    }, SCOPE);
 
     const ctx = createCallbackContext("commands:execute", 400);
     const handled = await handleCommandsCallback(ctx, createDeps());
@@ -601,7 +651,7 @@ describe("bot/commands/commands", () => {
         projectDirectory: "D:\\Projects\\Repo",
         commands: [{ name: "init", description: "create/update AGENTS.md" }],
       },
-    });
+    }, SCOPE);
 
     const ctx = createCallbackContext("commands:cancel", 999);
     const handled = await handleCommandsCallback(ctx, createDeps());
@@ -611,7 +661,7 @@ describe("bot/commands/commands", () => {
       text: t("commands.inactive_callback"),
       show_alert: true,
     });
-    expect(container.interactionManager.getSnapshot()?.kind).toBe("custom");
+    expect(container.interactionManager.getSnapshot(SCOPE)?.kind).toBe("custom");
   });
 
   it("shows next-page button when commands exceed page size", async () => {
@@ -673,7 +723,7 @@ describe("bot/commands/commands", () => {
     expect(options.reply_markup.inline_keyboard[2]?.[0]?.callback_data).toBe("commands:select:1");
     expect(options.reply_markup.inline_keyboard[3]?.[0]?.callback_data).toBe("commands:cancel");
 
-    const state = container.interactionManager.getSnapshot();
+    const state = container.interactionManager.getSnapshot(SCOPE);
     expect(state?.kind).toBe("custom");
     expect(state?.metadata.flow).toBe("commands");
     expect(state?.metadata.stage).toBe("list");
@@ -700,7 +750,7 @@ describe("bot/commands/commands", () => {
         commands,
         page: 0,
       },
-    });
+    }, SCOPE);
 
     const ctx = createCallbackContext("commands:page:1", 800);
     const handled = await handleCommandsCallback(ctx, createDeps());
@@ -744,7 +794,7 @@ describe("bot/commands/commands", () => {
         commands,
         page: 0,
       },
-    });
+    }, SCOPE);
 
     const ctx = createCallbackContext("commands:page:5", 900);
     const handled = await handleCommandsCallback(ctx, createDeps());
@@ -773,7 +823,7 @@ describe("bot/commands/commands", () => {
         commands,
         page: 1,
       },
-    });
+    }, SCOPE);
 
     const ctx = createCallbackContext("commands:select:12", 1000);
     const handled = await handleCommandsCallback(ctx, createDeps());
@@ -784,7 +834,7 @@ describe("bot/commands/commands", () => {
       expect.objectContaining({ reply_markup: expect.any(Object) }),
     );
 
-    const state = container.interactionManager.getSnapshot();
+    const state = container.interactionManager.getSnapshot(SCOPE);
     expect(state?.kind).toBe("custom");
     expect(state?.metadata.stage).toBe("confirm");
     expect(state?.metadata.commandName).toBe("cmd13");
@@ -818,7 +868,7 @@ describe("bot/commands/commands", () => {
       const ctx = await openSearch();
       expect(ctx.deleteMessage).toHaveBeenCalledTimes(1);
       expect(ctx.reply).toHaveBeenCalledWith(t("commands.search.prompt"));
-      expect(container.interactionManager.getSnapshot()).toMatchObject({
+      expect(container.interactionManager.getSnapshot(SCOPE)).toMatchObject({
         kind: "custom",
         expectedInput: "text",
         allowedCommands: [],
@@ -845,7 +895,7 @@ describe("bot/commands/commands", () => {
         t("commands.search.results", { query: "  nEeDlE  " }),
         expect.objectContaining({ reply_markup: expect.anything() }),
       );
-      expect(container.interactionManager.getSnapshot()).toMatchObject({
+      expect(container.interactionManager.getSnapshot(SCOPE)).toMatchObject({
         expectedInput: "callback",
         allowedCommands: [],
         metadata: {
@@ -877,7 +927,7 @@ describe("bot/commands/commands", () => {
         ],
       ]);
       expect(mocked.commandListMock).toHaveBeenCalledTimes(3);
-      expect(container.interactionManager.getSnapshot()?.metadata.commands).toHaveLength(13);
+      expect(container.interactionManager.getSnapshot(SCOPE)?.metadata.commands).toHaveLength(13);
     });
 
     it("shows no results with only search again and cancel", async () => {
@@ -897,10 +947,10 @@ describe("bot/commands/commands", () => {
     it("silently waits on whitespace and caps the query including the heading at 100 characters", async () => {
       await openSearch();
       const whitespace = createTextContext("   ");
-      const before = container.interactionManager.getSnapshot();
+      const before = container.interactionManager.getSnapshot(SCOPE);
       await handleCommandsSearchTextInput(whitespace, createDeps());
       expect(whitespace.reply).not.toHaveBeenCalled();
-      expect(container.interactionManager.getSnapshot()).toEqual(before);
+      expect(container.interactionManager.getSnapshot(SCOPE)).toEqual(before);
       expect(mocked.commandListMock).toHaveBeenCalledTimes(1);
       const ctx = createTextContext("a".repeat(110));
       await handleCommandsSearchTextInput(ctx, createDeps());
@@ -908,18 +958,18 @@ describe("bot/commands/commands", () => {
         t("commands.search.no_results", { query: "a".repeat(100) }),
         expect.anything(),
       );
-      expect(container.interactionManager.getSnapshot()?.metadata.query).toHaveLength(100);
+      expect(container.interactionManager.getSnapshot(SCOPE)?.metadata.query).toHaveLength(100);
     });
 
     it("starts a new query after deleting results and makes their buttons inactive", async () => {
       await showResults();
-      const token = container.interactionManager.getSnapshot()?.metadata.token;
+      const token = container.interactionManager.getSnapshot(SCOPE)?.metadata.token;
       const ctx = createCallbackContext("commands:search:again", 903);
       await handleCommandsCallback(ctx, createDeps());
       expect(ctx.deleteMessage).toHaveBeenCalledTimes(1);
       expect(ctx.reply).toHaveBeenCalledWith(t("commands.search.prompt"));
-      expect(container.interactionManager.getSnapshot()?.metadata.stage).toBe("input");
-      expect(container.interactionManager.getSnapshot()?.metadata.token).not.toBe(token);
+      expect(container.interactionManager.getSnapshot(SCOPE)?.metadata.stage).toBe("input");
+      expect(container.interactionManager.getSnapshot(SCOPE)?.metadata.token).not.toBe(token);
       const stale = createCallbackContext("commands:search:result:0", 903);
       await handleCommandsCallback(stale, createDeps());
       expect(stale.answerCallbackQuery).toHaveBeenCalledWith({
@@ -932,7 +982,7 @@ describe("bot/commands/commands", () => {
       await showResults();
       const ctx = createCallbackContext("commands:search:cancel", 903);
       await handleCommandsCallback(ctx, createDeps());
-      expect(container.interactionManager.getSnapshot()).toBeNull();
+      expect(container.interactionManager.getSnapshot(SCOPE)).toBeNull();
       expect(ctx.answerCallbackQuery).toHaveBeenCalledWith({ text: t("common.cancelled") });
       expect(ctx.deleteMessage).toHaveBeenCalledTimes(1);
       expect(ctx.reply).not.toHaveBeenCalled();
@@ -948,7 +998,7 @@ describe("bot/commands/commands", () => {
       );
       expect(ctx.deleteMessage).not.toHaveBeenCalled();
       expect(mocked.sessionCommandMock).not.toHaveBeenCalled();
-      expect(container.interactionManager.getSnapshot()).toMatchObject({
+      expect(container.interactionManager.getSnapshot(SCOPE)).toMatchObject({
         expectedInput: "mixed",
         allowedCommands: expect.arrayContaining(["/help", "/status", "/abort"]),
         metadata: { flow: "commands", stage: "confirm", commandName: "command-11", messageId: 903 },
@@ -969,13 +1019,13 @@ describe("bot/commands/commands", () => {
       const ctx = createTextContext("command");
       await handleCommandsSearchTextInput(ctx, createDeps());
       expect(ctx.reply).toHaveBeenCalledWith(t("commands.fetch_error"));
-      expect(container.interactionManager.getSnapshot()).toBeNull();
+      expect(container.interactionManager.getSnapshot(SCOPE)).toBeNull();
       expect(ctx.deleteMessage).not.toHaveBeenCalled();
     });
 
     it("keeps results available when loading another page fails", async () => {
       await showResults();
-      const before = container.interactionManager.getSnapshot();
+      const before = container.interactionManager.getSnapshot(SCOPE);
       mocked.commandListMock.mockRejectedValueOnce(new Error("offline"));
       const ctx = createCallbackContext("commands:search:page:1", 903);
       await handleCommandsCallback(ctx, createDeps());
@@ -983,15 +1033,19 @@ describe("bot/commands/commands", () => {
         text: t("commands.page_load_error_callback"),
       });
       expect(ctx.editMessageText).not.toHaveBeenCalled();
-      expect(container.interactionManager.getSnapshot()).toEqual(before);
+      expect(container.interactionManager.getSnapshot(SCOPE)).toEqual(before);
     });
 
     it.each(["question", "permission"] as const)(
       "does not resume after a %s replaces results",
       async (kind) => {
         await showResults();
-        startInteractionForTest(container.interactionManager, { kind, expectedInput: "callback" });
-        const before = container.interactionManager.getSnapshot();
+        startInteractionForTest(
+          container.interactionManager,
+          { kind, expectedInput: "callback" },
+          SCOPE,
+        );
+        const before = container.interactionManager.getSnapshot(SCOPE);
         const ctx = createCallbackContext("commands:search:result:0", 903);
         await handleCommandsCallback(ctx, createDeps());
         expect(ctx.answerCallbackQuery).toHaveBeenCalledWith({
@@ -1000,7 +1054,7 @@ describe("bot/commands/commands", () => {
         });
         expect(ctx.editMessageText).not.toHaveBeenCalled();
         expect(ctx.deleteMessage).not.toHaveBeenCalled();
-        expect(container.interactionManager.getSnapshot()).toEqual(before);
+        expect(container.interactionManager.getSnapshot(SCOPE)).toEqual(before);
         container.interactionManager.clear("agent_request_ended");
         expect(
           await handleCommandsSearchTextInput(createTextContext("command"), createDeps()),
@@ -1018,10 +1072,14 @@ describe("bot/commands/commands", () => {
       "again delete",
     ])("does not overwrite a replacement interaction during %s", async (boundary) => {
       const replace = () =>
-        startInteractionForTest(container.interactionManager, {
-          kind: "permission",
-          expectedInput: "callback",
-        });
+        startInteractionForTest(
+          container.interactionManager,
+          {
+            kind: "permission",
+            expectedInput: "callback",
+          },
+          SCOPE,
+        );
       if (boundary === "start delete") {
         await commandsCommand(createCommandContext(100) as never, createDeps());
         const ctx = createCallbackContext("commands:search", 100);
@@ -1075,7 +1133,7 @@ describe("bot/commands/commands", () => {
         await handleCommandsCallback(ctx, createDeps());
         if (boundary === "page load") expect(ctx.editMessageText).not.toHaveBeenCalled();
       }
-      expect(container.interactionManager.getSnapshot()?.kind).toBe("permission");
+      expect(container.interactionManager.getSnapshot(SCOPE)?.kind).toBe("permission");
     });
 
     it.each(["search", "search:page:1", "search:result:0", "search:again", "search:cancel"])(
@@ -1083,13 +1141,13 @@ describe("bot/commands/commands", () => {
       async (suffix) => {
         await showResults();
         container.foregroundSessionState.markBusy("session-1", "D:\\Projects\\Repo");
-        const before = container.interactionManager.getSnapshot();
+        const before = container.interactionManager.getSnapshot(SCOPE);
         const ctx = createCallbackContext(`commands:${suffix}`, 903);
         await handleCommandsCallback(ctx, createDeps());
         expect(ctx.answerCallbackQuery).toHaveBeenCalledWith({ text: t("bot.session_busy") });
         expect(ctx.editMessageText).not.toHaveBeenCalled();
         expect(ctx.deleteMessage).not.toHaveBeenCalled();
-        expect(container.interactionManager.getSnapshot()).toEqual(before);
+        expect(container.interactionManager.getSnapshot(SCOPE)).toEqual(before);
       },
     );
 
@@ -1099,11 +1157,15 @@ describe("bot/commands/commands", () => {
         await showResults();
         const ctx = createCallbackContext("commands:search:result:0", 903);
         vi.mocked(ctx.editMessageText).mockImplementationOnce(async () => {
-          startInteractionForTest(container.interactionManager, { kind, expectedInput: "callback" });
+          startInteractionForTest(
+            container.interactionManager,
+            { kind, expectedInput: "callback" },
+            SCOPE,
+          );
           throw new Error("Telegram edit failed");
         });
         await expect(handleCommandsCallback(ctx, createDeps())).resolves.toBe(true);
-        expect(container.interactionManager.getSnapshot()?.kind).toBe(kind);
+        expect(container.interactionManager.getSnapshot(SCOPE)?.kind).toBe(kind);
         expect(ctx.deleteMessage).not.toHaveBeenCalled();
         expect(mocked.sessionCommandMock).not.toHaveBeenCalled();
       },
@@ -1114,7 +1176,7 @@ describe("bot/commands/commands", () => {
       const ctx = createCallbackContext("commands:search:result:0", 903);
       vi.mocked(ctx.editMessageText).mockRejectedValueOnce(new Error("Telegram edit failed"));
       await expect(handleCommandsCallback(ctx, createDeps())).resolves.toBe(true);
-      expect(container.interactionManager.getSnapshot()).toBeNull();
+      expect(container.interactionManager.getSnapshot(SCOPE)).toBeNull();
       expect(ctx.answerCallbackQuery).toHaveBeenCalledWith({ text: t("callback.processing_error") });
       expect(mocked.sessionCommandMock).not.toHaveBeenCalled();
     });
@@ -1125,7 +1187,7 @@ describe("bot/commands/commands", () => {
       await commandsCommand(ctx as never, createDeps());
       expect(ctx.reply).toHaveBeenCalledWith(t("bot.session_busy"));
       expect(mocked.commandListMock).not.toHaveBeenCalled();
-      expect(container.interactionManager.getSnapshot()).toBeNull();
+      expect(container.interactionManager.getSnapshot(SCOPE)).toBeNull();
     });
 
     it.each(["no project", "empty catalog", "catalog error"])(
@@ -1145,7 +1207,7 @@ describe("bot/commands/commands", () => {
               ? "commands.empty"
               : "commands.fetch_error";
         expect(ctx.reply).toHaveBeenCalledWith(t(key));
-        expect(container.interactionManager.getSnapshot()).toBeNull();
+        expect(container.interactionManager.getSnapshot(SCOPE)).toBeNull();
       },
     );
   });

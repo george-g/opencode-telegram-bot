@@ -69,13 +69,14 @@ export function createAttachPresentation(
 
       await pinnedMessageManager.setAttachState(attached, busy);
     },
-    showCurrentQuestion: (api, chatId) => showCurrentQuestion(api, chatId, deps),
-    showPermissionRequest: (api, chatId, request) =>
-      showPermissionRequest(api, chatId, request, deps),
-    applyPermissionPromptChanges: (api, chatId, changes) =>
-      applyPermissionPromptChanges(api, chatId, changes, deps),
-    closeQuestionSettledOutside: (api, chatId) =>
-      closeQuestionSettledOutside(api, chatId, "answered", deps),
-    closeQuestionNotAnswered: (api, chatId) => closeQuestionNotAnswered(api, chatId, deps),
+    showCurrentQuestion: (api, chatId, scope) => showCurrentQuestion(api, chatId, deps, scope),
+    showPermissionRequest: (api, chatId, request, scope) =>
+      showPermissionRequest(api, chatId, request, deps, undefined, scope),
+    applyPermissionPromptChanges: (api, chatId, changes, scope) =>
+      applyPermissionPromptChanges(api, chatId, changes, deps, scope),
+    closeQuestionSettledOutside: (api, chatId, scope) =>
+      closeQuestionSettledOutside(api, chatId, "answered", deps, scope),
+    closeQuestionNotAnswered: (api, chatId, scope) =>
+      closeQuestionNotAnswered(api, chatId, deps, scope),
   };
 }

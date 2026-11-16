@@ -4,6 +4,7 @@ import { t } from "../../i18n/index.js";
 import { listScheduledTasks } from "../../app/stores/scheduled-task-store.js";
 import type { ScheduledTask } from "../../app/types/scheduled-task.js";
 import { buildTaskListKeyboard } from "../menus/scheduled-task-menu.js";
+import { getInteractionScope } from "../middleware/interaction-scope.js";
 import { logger } from "../../utils/logger.js";
 
 function sortTasks(tasks: ScheduledTask[]): ScheduledTask[] {
@@ -36,15 +37,18 @@ export async function taskListCommand(
       reply_markup: buildTaskListKeyboard(tasks),
     });
 
-    deps.interactionManager.start({
-      kind: "custom",
-      expectedInput: "callback",
-      metadata: {
-        flow: "tasklist",
-        stage: "list",
-        messageId: message.message_id,
+    deps.interactionManager.start(
+      {
+        kind: "custom",
+        expectedInput: "callback",
+        metadata: {
+          flow: "tasklist",
+          stage: "list",
+          messageId: message.message_id,
+        },
       },
-    });
+      getInteractionScope(ctx),
+    );
   } catch (error) {
     logger.error("[TaskList] Failed to open task list", error);
     await ctx.reply(t("tasklist.load_error"));

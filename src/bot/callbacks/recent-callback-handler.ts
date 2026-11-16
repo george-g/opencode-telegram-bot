@@ -12,6 +12,7 @@ import { replyBusyBlocked } from "../messages/busy-blocked-renderer.js";
 import { createProjectSwitchPresentation } from "../services/project-switch-presentation.js";
 import { selectSessionById, type SessionSelectDeps } from "./session-callback-handler.js";
 import { failure } from "./feedback.js";
+import { getInteractionScope } from "../middleware/interaction-scope.js";
 
 type RecentSelectDeps = SessionSelectDeps & Pick<AppContainer,
   "backgroundSessionTracker" | "pinnedMessageManager" | "resetAggregator" | "goalManager">;
@@ -26,7 +27,7 @@ export async function handleRecentSelect(ctx: Context, deps: RecentSelectDeps): 
   if (!await ensureActiveInlineMenu(ctx, "recent", deps)) return true;
 
   const indexText = data.slice(RECENT_CALLBACK_PREFIX.length);
-  const metadata = deps.interactionManager.getSnapshot()?.metadata;
+  const metadata = deps.interactionManager.getSnapshot(getInteractionScope(ctx))?.metadata;
   const index = /^\d+$/.test(indexText) ? Number(indexText) : -1;
   const ids = metadata?.sessionIds;
   const directories = metadata?.directories;

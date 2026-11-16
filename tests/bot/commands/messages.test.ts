@@ -142,9 +142,12 @@ beforeEach(() => {
   } as unknown as MessagesCallbackDeps;
 });
 
+/** The scope every context in this file resolves to: chat 777 with no forum topic. */
+const SCOPE = "777:no-thread";
+
 describe("bot/commands/messages", () => {
   beforeEach(() => {
-    container.interactionManager.clear("test_setup");
+    container.interactionManager.clear("test_setup", SCOPE);
 
     mocked.currentProject = {
       id: "project-1",
@@ -242,7 +245,7 @@ describe("bot/commands/messages", () => {
     expect(options.reply_markup.inline_keyboard[1]?.[0]?.text).toContain("[10:03] older prompt");
     expect(options.reply_markup.inline_keyboard[2]?.[0]?.callback_data).toBe("messages:cancel");
 
-    const state = container.interactionManager.getSnapshot();
+    const state = container.interactionManager.getSnapshot(SCOPE);
     expect(state?.kind).toBe("custom");
     expect(state?.expectedInput).toBe("callback");
     expect(state?.metadata.flow).toBe("messages");
@@ -309,7 +312,7 @@ describe("bot/commands/messages", () => {
     // msg-2 and msg-3 should not be present
     expect(options.reply_markup.inline_keyboard[1]?.[0]?.callback_data).toBe("messages:cancel");
 
-    const state = container.interactionManager.getSnapshot();
+    const state = container.interactionManager.getSnapshot(SCOPE);
     expect(state?.metadata.messages).toEqual([
       { id: "msg-1", text: "first message", created: time1 },
     ]);
@@ -334,7 +337,7 @@ describe("bot/commands/messages", () => {
         messages,
         page: 0,
       },
-    });
+    }, SCOPE);
 
     const ctx = createCallbackContext("messages:page:1", 300);
     const handled = await handleMessagesCallback(ctx, testDeps);
@@ -347,7 +350,7 @@ describe("bot/commands/messages", () => {
     expect(text).toBe(t("messages.select_page", { page: 2 }));
     expect(options.reply_markup.inline_keyboard[0]?.[0]?.callback_data).toBe("messages:select:10");
     expect(options.reply_markup.inline_keyboard[2]?.[0]?.callback_data).toBe("messages:page:0");
-    expect(container.interactionManager.getSnapshot()?.metadata.page).toBe(1);
+    expect(container.interactionManager.getSnapshot(SCOPE)?.metadata.page).toBe(1);
   });
 
   it("opens full message and provides placeholder actions", async () => {
@@ -364,7 +367,7 @@ describe("bot/commands/messages", () => {
         messages: [{ id: "msg-1", text: "full prompt text", created }],
         page: 0,
       },
-    });
+    }, SCOPE);
 
     const ctx = createCallbackContext("messages:select:0", 400);
     const handled = await handleMessagesCallback(ctx, testDeps);
@@ -379,7 +382,7 @@ describe("bot/commands/messages", () => {
     expect(options.reply_markup.inline_keyboard[1]?.[0]?.callback_data).toBe("messages:fork");
     expect(options.reply_markup.inline_keyboard[2]?.[0]?.callback_data).toBe("messages:back");
     expect(options.reply_markup.inline_keyboard[2]?.[1]?.callback_data).toBe("messages:cancel");
-    expect(container.interactionManager.getSnapshot()?.metadata.stage).toBe("detail");
+    expect(container.interactionManager.getSnapshot(SCOPE)?.metadata.stage).toBe("detail");
   });
 
   it("returns to list from message detail on back", async () => {
@@ -397,7 +400,7 @@ describe("bot/commands/messages", () => {
         page: 0,
         selectedIndex: 0,
       },
-    });
+    }, SCOPE);
 
     const ctx = createCallbackContext("messages:back", 500);
     const handled = await handleMessagesCallback(ctx, testDeps);
@@ -407,7 +410,7 @@ describe("bot/commands/messages", () => {
       t("messages.select"),
       expect.objectContaining({ reply_markup: expect.any(Object) }),
     );
-    expect(container.interactionManager.getSnapshot()?.metadata.stage).toBe("list");
+    expect(container.interactionManager.getSnapshot(SCOPE)?.metadata.stage).toBe("list");
   });
 
   it("closes menu on cancel from detail", async () => {
@@ -425,7 +428,7 @@ describe("bot/commands/messages", () => {
         page: 0,
         selectedIndex: 0,
       },
-    });
+    }, SCOPE);
 
     const ctx = createCallbackContext("messages:cancel", 500);
     const handled = await handleMessagesCallback(ctx, testDeps);
@@ -435,7 +438,7 @@ describe("bot/commands/messages", () => {
       text: t("common.cancelled"),
     });
     expect(ctx.deleteMessage).toHaveBeenCalledTimes(1);
-    expect(container.interactionManager.getSnapshot()).toBeNull();
+    expect(container.interactionManager.getSnapshot(SCOPE)).toBeNull();
   });
 
   it("closes menu on cancel from list", async () => {
@@ -452,7 +455,7 @@ describe("bot/commands/messages", () => {
         messages,
         page: 0,
       },
-    });
+    }, SCOPE);
 
     const ctx = createCallbackContext("messages:cancel", 501);
     const handled = await handleMessagesCallback(ctx, testDeps);
@@ -462,7 +465,7 @@ describe("bot/commands/messages", () => {
       text: t("common.cancelled"),
     });
     expect(ctx.deleteMessage).toHaveBeenCalledTimes(1);
-    expect(container.interactionManager.getSnapshot()).toBeNull();
+    expect(container.interactionManager.getSnapshot(SCOPE)).toBeNull();
   });
 
   it("reverts message successfully", async () => {
@@ -480,7 +483,7 @@ describe("bot/commands/messages", () => {
         page: 0,
         selectedIndex: 0,
       },
-    });
+    }, SCOPE);
 
     mocked.sessionRevertMock.mockResolvedValue({});
 
@@ -497,7 +500,7 @@ describe("bot/commands/messages", () => {
     expect(ctx.editMessageText).toHaveBeenCalledWith(
       t("messages.revert_success", { text: "test prompt" }),
     );
-    expect(container.interactionManager.getSnapshot()).toBeNull();
+    expect(container.interactionManager.getSnapshot(SCOPE)).toBeNull();
   });
 
   it("handles revert error", async () => {
@@ -515,7 +518,7 @@ describe("bot/commands/messages", () => {
         page: 0,
         selectedIndex: 0,
       },
-    });
+    }, SCOPE);
 
     mocked.sessionRevertMock.mockRejectedValue(new Error("API error"));
 
@@ -530,7 +533,7 @@ describe("bot/commands/messages", () => {
       messageID: "msg-1",
     });
     expect(ctx.editMessageText).toHaveBeenCalledWith(t("messages.revert_error"));
-    expect(container.interactionManager.getSnapshot()).toBeNull();
+    expect(container.interactionManager.getSnapshot(SCOPE)).toBeNull();
   });
 
   it("rejects revert from list stage", async () => {
@@ -547,7 +550,7 @@ describe("bot/commands/messages", () => {
         messages,
         page: 0,
       },
-    });
+    }, SCOPE);
 
     const ctx = createCallbackContext("messages:revert", 600);
     const handled = await handleMessagesCallback(ctx, testDeps);
@@ -576,7 +579,7 @@ describe("bot/commands/messages", () => {
         page: 0,
         selectedIndex: 0,
       },
-    });
+    }, SCOPE);
 
     const forkedSession = {
       id: "session-2",
@@ -611,7 +614,7 @@ describe("bot/commands/messages", () => {
     expect(ctx.editMessageText).toHaveBeenCalledWith(
       t("messages.fork_success", { text: "test prompt" }),
     );
-    expect(container.interactionManager.getSnapshot()).toBeNull();
+    expect(container.interactionManager.getSnapshot(SCOPE)).toBeNull();
   });
 
   it("pulls the forked session settings before attaching and syncs the keyboard state", async () => {
@@ -629,7 +632,7 @@ describe("bot/commands/messages", () => {
         page: 0,
         selectedIndex: 0,
       },
-    });
+    }, SCOPE);
 
     const forkedSession = {
       id: "session-2",
@@ -675,7 +678,7 @@ describe("bot/commands/messages", () => {
         page: 0,
         selectedIndex: 0,
       },
-    });
+    }, SCOPE);
     mocked.sessionForkMock.mockResolvedValue({
       data: { id: "session-2", title: "Forked Session", directory: "D:\\Projects\\Repo" },
       error: null,
@@ -730,7 +733,7 @@ describe("bot/commands/messages", () => {
         page: 0,
         selectedIndex: 0,
       },
-    });
+    }, SCOPE);
 
     mocked.sessionForkMock.mockRejectedValue(new Error("API error"));
 
@@ -745,7 +748,7 @@ describe("bot/commands/messages", () => {
       directory: "D:\\Projects\\Repo",
     });
     expect(ctx.editMessageText).toHaveBeenCalledWith(t("messages.fork_error"));
-    expect(container.interactionManager.getSnapshot()).toBeNull();
+    expect(container.interactionManager.getSnapshot(SCOPE)).toBeNull();
   });
 
   it("rejects fork from list stage", async () => {
@@ -762,7 +765,7 @@ describe("bot/commands/messages", () => {
         messages,
         page: 0,
       },
-    });
+    }, SCOPE);
 
     const ctx = createCallbackContext("messages:fork", 600);
     const handled = await handleMessagesCallback(ctx, testDeps);
@@ -789,7 +792,7 @@ describe("bot/commands/messages", () => {
         messages: [{ id: "msg-1", text: "text", created: 1000 }],
         page: 0,
       },
-    });
+    }, SCOPE);
 
     const ctx = createCallbackContext("messages:select:0", 999);
     const handled = await handleMessagesCallback(ctx, testDeps);

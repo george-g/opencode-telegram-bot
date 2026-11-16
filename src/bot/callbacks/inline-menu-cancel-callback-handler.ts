@@ -40,7 +40,7 @@ export async function handleInlineMenuCancel(
     return true;
   }
 
-  clearActiveInlineMenu(`inline_menu_cancel:${menuKind}`, deps);
+  clearActiveInlineMenu(`inline_menu_cancel:${menuKind}`, ctx, deps);
 
   await cancelMenu(ctx);
 

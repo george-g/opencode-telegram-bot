@@ -133,6 +133,12 @@ function richUpdate(blocks: RichBlock[]): Update {
 
 let container: AppContainer;
 
+/**
+ * The scope the routing updates resolve to: the allowed user's private chat with
+ * no forum topic.
+ */
+const SCOPE = `${config.telegram.allowedUserId}:no-thread`;
+
 beforeEach(() => {
   container = createTestAppContainer();
 });
@@ -209,9 +215,10 @@ describe("bot/rich-message-routing", () => {
     container.questionManager.startQuestions(
       [{ header: "Q", question: "?", options: [] }],
       "req-1", "session-1",
+      SCOPE,
     );
     // A text answer is accepted once the user picked "custom answer".
-    container.interactionManager.transition({ expectedInput: "mixed" });
+    container.interactionManager.transition({ expectedInput: "mixed" }, SCOPE);
     const { bot } = createRoutingBot();
 
     await bot.handleUpdate(richUpdate([{ type: "paragraph", text: "an answer" }]));
@@ -248,7 +255,7 @@ describe("bot/rich-message-routing", () => {
   it.each([true, false])("refuses rich photos during goal input without accepting their text (hasText=%s)", async (hasText) => {
     container.interactionManager.start({
       kind: "custom", expectedInput: "text", metadata: { flow: "goal", stage: "objective", sessionId: "session-1", directory: "repo" },
-    });
+    }, SCOPE);
     const command = vi.spyOn(container.goalService, "command");
     const { bot, replies } = createRoutingBot();
     await bot.handleUpdate(richUpdate([
@@ -256,7 +263,7 @@ describe("bot/rich-message-routing", () => {
       { type: "photo", photo: [{ file_id: "photo-1", file_unique_id: "p", width: 100, height: 100 }] },
     ]));
     expect(replies).toContain(t("interaction.blocked.expected_text"));
-    expect(container.interactionManager.getSnapshot()?.metadata.stage).toBe("objective");
+    expect(container.interactionManager.getSnapshot(SCOPE)?.metadata.stage).toBe("objective");
     expect(command).not.toHaveBeenCalled();
     expect(mocked.queuePromptForMerging).not.toHaveBeenCalled();
     expect(promptQueue.size()).toBe(0);

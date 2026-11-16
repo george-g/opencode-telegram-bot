@@ -69,12 +69,16 @@ describe("bot/routers/message-router", () => {
     async (catalog, text) => {
       const bot = { on: vi.fn(), hears: vi.fn() };
       const container = createTestAppContainer({ setTelegramContext: vi.fn() });
-      container.interactionManager.start({
-        kind: "custom",
-        expectedInput: "text",
-        allowedCommands: [],
-        metadata: { flow: `${catalog}-search`, stage: "input", token: Symbol("search") },
-      });
+      const scope = "42:no-thread";
+      container.interactionManager.start(
+        {
+          kind: "custom",
+          expectedInput: "text",
+          allowedCommands: [],
+          metadata: { flow: `${catalog}-search`, stage: "input", token: Symbol("search") },
+        },
+        scope,
+      );
       const project = vi.spyOn(settingsStore, "getCurrentProject").mockReturnValue({
         id: "project-1",
         worktree: "repo",
@@ -99,14 +103,14 @@ describe("bot/routers/message-router", () => {
           expect(loadCommandCatalogMock).not.toHaveBeenCalled();
           expect(loadSkillsCatalogMock).not.toHaveBeenCalled();
           expect(ctx.reply).not.toHaveBeenCalled();
-          expect(container.interactionManager.getSnapshot()?.metadata.stage).toBe("input");
+          expect(container.interactionManager.getSnapshot(scope)?.metadata.stage).toBe("input");
         } else {
           expect(loadCatalogMock).toHaveBeenCalledWith("repo");
           expect(ctx.reply).toHaveBeenCalledWith(
             t(catalog === "skills" ? "skills.search.results" : "commands.search.results", { query: text }),
             expect.anything(),
           );
-          expect(container.interactionManager.getSnapshot()?.metadata.stage).toBe("results");
+          expect(container.interactionManager.getSnapshot(scope)?.metadata.stage).toBe("results");
         }
         expect(queuePromptForMergingMock).not.toHaveBeenCalled();
       } finally {

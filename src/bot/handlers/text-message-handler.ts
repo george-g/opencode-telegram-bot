@@ -11,6 +11,7 @@ import {
   executeSkill,
   parseSkillsMetadata,
 } from "../callbacks/skills-catalog-callback-handler.js";
+import { getInteractionScope } from "../middleware/interaction-scope.js";
 
 export async function handleCommandTextArguments(
   ctx: Context,
@@ -21,7 +22,8 @@ export async function handleCommandTextArguments(
     return false;
   }
 
-  const metadata = parseCommandsMetadata(deps.interactionManager.getSnapshot());
+  const scope = getInteractionScope(ctx);
+  const metadata = parseCommandsMetadata(deps.interactionManager.getSnapshot(scope));
   if (!metadata || metadata.stage !== "confirm") {
     return false;
   }
@@ -32,7 +34,7 @@ export async function handleCommandTextArguments(
     return true;
   }
 
-  clearCommandsInteraction(deps, "commands_arguments_submitted");
+  clearCommandsInteraction(deps, "commands_arguments_submitted", scope);
 
   if (ctx.chat) {
     await ctx.api.deleteMessage(ctx.chat.id, metadata.messageId).catch(() => {});
@@ -56,7 +58,8 @@ export async function handleSkillTextArguments(
     return false;
   }
 
-  const metadata = parseSkillsMetadata(deps.interactionManager.getSnapshot());
+  const scope = getInteractionScope(ctx);
+  const metadata = parseSkillsMetadata(deps.interactionManager.getSnapshot(scope));
   if (!metadata || metadata.stage !== "confirm") {
     return false;
   }
@@ -67,7 +70,7 @@ export async function handleSkillTextArguments(
     return true;
   }
 
-  clearSkillsInteraction(deps, "skills_arguments_submitted");
+  clearSkillsInteraction(deps, "skills_arguments_submitted", scope);
 
   if (ctx.chat) {
     await ctx.api.deleteMessage(ctx.chat.id, metadata.messageId).catch(() => {});

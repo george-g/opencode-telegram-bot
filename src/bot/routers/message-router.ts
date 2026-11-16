@@ -39,6 +39,7 @@ import { handleVoiceMessage } from "../handlers/voice-handler.js";
 import { unknownCommandMiddleware } from "../middleware/unknown-command.js";
 import { getIncomingPrompt } from "../handlers/rich-message-handler.js";
 import { handleUnsupportedMessage } from "../handlers/unsupported-message-handler.js";
+import { getInteractionScope } from "../middleware/interaction-scope.js";
 
 interface MessageRouterDeps {
   container: AppContainer;
@@ -48,7 +49,7 @@ async function blockMenuWhileInteractionActive(
   ctx: Context,
   interactionManager: AppContainer["interactionManager"],
 ): Promise<boolean> {
-  const activeInteraction = interactionManager.getSnapshot();
+  const activeInteraction = interactionManager.getSnapshot(getInteractionScope(ctx));
   if (!activeInteraction) {
     return false;
   }
@@ -221,7 +222,7 @@ export function registerMessageRouter(bot: Bot<Context>, deps: MessageRouterDeps
       return;
     }
 
-    if (container.questionManager.isActive()) {
+    if (container.questionManager.isActive(getInteractionScope(ctx))) {
       await handleQuestionTextAnswer(ctx, container);
       return;
     }

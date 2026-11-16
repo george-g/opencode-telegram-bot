@@ -180,6 +180,7 @@ describe("open command", () => {
           expectedInput: "callback",
           metadata: expect.objectContaining({ menuKind: "open" }),
         }),
+        "123:no-thread",
       );
     });
 

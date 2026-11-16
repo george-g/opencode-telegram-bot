@@ -10,6 +10,8 @@ import type { InteractionState } from "../../app/types/interaction.js";
 import { logger } from "../../utils/logger.js";
 import { t } from "../../i18n/index.js";
 import { cancelMenu } from "./feedback.js";
+import { getInteractionScope } from "../middleware/interaction-scope.js";
+import { DEFAULT_INTERACTION_SCOPE } from "../../app/types/interaction-scope.js";
 import {
   buildMcpsDetailKeyboard,
   buildMcpsDetailText,
@@ -101,10 +103,14 @@ function parseMcpsMetadata(state: InteractionState | null): McpsMetadata | null 
 
 export type McpsCallbackDeps = Pick<AppContainer, "interactionManager">;
 
-function clearMcpsInteraction(deps: McpsCallbackDeps, reason: string): void {
-  const metadata = parseMcpsMetadata(deps.interactionManager.getSnapshot());
+function clearMcpsInteraction(
+  deps: McpsCallbackDeps,
+  reason: string,
+  scope: string = DEFAULT_INTERACTION_SCOPE,
+): void {
+  const metadata = parseMcpsMetadata(deps.interactionManager.getSnapshot(scope));
   if (metadata) {
-    deps.interactionManager.clear(reason);
+    deps.interactionManager.clear(reason, scope);
   }
 }
 
@@ -114,7 +120,8 @@ export async function handleMcpsCallback(ctx: Context, deps: McpsCallbackDeps): 
     return false;
   }
 
-  const metadata = parseMcpsMetadata(deps.interactionManager.getSnapshot());
+  const scope = getInteractionScope(ctx);
+  const metadata = parseMcpsMetadata(deps.interactionManager.getSnapshot(scope));
   const callbackMessageId = getCallbackMessageId(ctx);
 
   if (!metadata || callbackMessageId === null || metadata.messageId !== callbackMessageId) {
@@ -124,7 +131,7 @@ export async function handleMcpsCallback(ctx: Context, deps: McpsCallbackDeps): 
 
   try {
     if (data === MCPS_CALLBACK_CANCEL) {
-      clearMcpsInteraction(deps, "mcps_cancelled");
+      clearMcpsInteraction(deps, "mcps_cancelled", scope);
       await cancelMenu(ctx);
       return true;
     }
@@ -140,16 +147,19 @@ export async function handleMcpsCallback(ctx: Context, deps: McpsCallbackDeps): 
       await ctx.answerCallbackQuery();
       await ctx.editMessageText(t("mcps.select"), { reply_markup: keyboard });
 
-      deps.interactionManager.transition({
-        expectedInput: "callback",
-        metadata: {
-          flow: "mcps",
-          stage: "list",
-          messageId: metadata.messageId,
-          projectDirectory: metadata.projectDirectory,
-          servers,
+      deps.interactionManager.transition(
+        {
+          expectedInput: "callback",
+          metadata: {
+            flow: "mcps",
+            stage: "list",
+            messageId: metadata.messageId,
+            projectDirectory: metadata.projectDirectory,
+            servers,
+          },
         },
-      });
+        scope,
+      );
 
       return true;
     }
@@ -178,16 +188,19 @@ export async function handleMcpsCallback(ctx: Context, deps: McpsCallbackDeps): 
         await ctx.editMessageText(t("mcps.select"), {
           reply_markup: buildMcpsListKeyboard(updatedServers),
         });
-        deps.interactionManager.transition({
-          expectedInput: "callback",
-          metadata: {
-            flow: "mcps",
-            stage: "list",
-            messageId: metadata.messageId,
-            projectDirectory: metadata.projectDirectory,
-            servers: updatedServers,
+        deps.interactionManager.transition(
+          {
+            expectedInput: "callback",
+            metadata: {
+              flow: "mcps",
+              stage: "list",
+              messageId: metadata.messageId,
+              projectDirectory: metadata.projectDirectory,
+              servers: updatedServers,
+            },
           },
-        });
+          scope,
+        );
         return true;
       }
 
@@ -195,17 +208,20 @@ export async function handleMcpsCallback(ctx: Context, deps: McpsCallbackDeps): 
         reply_markup: buildMcpsDetailKeyboard(updatedServer),
       });
 
-      deps.interactionManager.transition({
-        expectedInput: "callback",
-        metadata: {
-          flow: "mcps",
-          stage: "detail",
-          messageId: metadata.messageId,
-          projectDirectory: metadata.projectDirectory,
-          serverName: updatedServer.name,
-          servers: updatedServers,
+      deps.interactionManager.transition(
+        {
+          expectedInput: "callback",
+          metadata: {
+            flow: "mcps",
+            stage: "detail",
+            messageId: metadata.messageId,
+            projectDirectory: metadata.projectDirectory,
+            serverName: updatedServer.name,
+            servers: updatedServers,
+          },
         },
-      });
+        scope,
+      );
 
       return true;
     }
@@ -228,17 +244,20 @@ export async function handleMcpsCallback(ctx: Context, deps: McpsCallbackDeps): 
         reply_markup: buildMcpsDetailKeyboard(server),
       });
 
-      deps.interactionManager.transition({
-        expectedInput: "callback",
-        metadata: {
-          flow: "mcps",
-          stage: "detail",
-          messageId: metadata.messageId,
-          projectDirectory: metadata.projectDirectory,
-          serverName: server.name,
-          servers: metadata.servers,
+      deps.interactionManager.transition(
+        {
+          expectedInput: "callback",
+          metadata: {
+            flow: "mcps",
+            stage: "detail",
+            messageId: metadata.messageId,
+            projectDirectory: metadata.projectDirectory,
+            serverName: server.name,
+            servers: metadata.servers,
+          },
         },
-      });
+        scope,
+      );
 
       return true;
     }
@@ -247,7 +266,7 @@ export async function handleMcpsCallback(ctx: Context, deps: McpsCallbackDeps): 
     return true;
   } catch (error) {
     logger.error("[Mcps] Error handling MCP callback:", error);
-    clearMcpsInteraction(deps, "mcps_callback_error");
+    clearMcpsInteraction(deps, "mcps_callback_error", scope);
     await ctx.answerCallbackQuery({ text: t("mcps.toggle_error") }).catch(() => {});
     return true;
   }

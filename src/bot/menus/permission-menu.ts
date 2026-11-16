@@ -9,6 +9,7 @@ import type {
 } from "../../app/types/permission.js";
 import type { I18nKey } from "../../i18n/en.js";
 import { t } from "../../i18n/index.js";
+import { DEFAULT_INTERACTION_SCOPE } from "../../app/types/interaction-scope.js";
 
 const TELEGRAM_MESSAGE_LIMIT = 4096;
 const PATTERN_PREFIX = "• ";
@@ -63,21 +64,23 @@ const PERMISSION_EMOJIS: Record<string, string> = {
 export function clearPermissionInteraction(
   reason: string,
   deps: PermissionInteractionDeps,
+  scope: string = DEFAULT_INTERACTION_SCOPE,
 ): void {
-  const state = deps.interactionManager.getSnapshot();
+  const state = deps.interactionManager.getSnapshot(scope);
   if (state?.kind === "permission") {
-    deps.interactionManager.clear(reason);
+    deps.interactionManager.clear(reason, scope);
   }
 }
 
 export function syncPermissionInteractionState(
   deps: Pick<AppContainer, "interactionManager" | "permissionManager">,
   metadata: Record<string, unknown> = {},
+  scope: string = DEFAULT_INTERACTION_SCOPE,
 ): void {
-  const pendingCount = deps.permissionManager.getPendingCount();
+  const pendingCount = deps.permissionManager.getPendingCount(scope);
 
   if (pendingCount === 0) {
-    clearPermissionInteraction("permission_no_pending_requests", deps);
+    clearPermissionInteraction("permission_no_pending_requests", deps, scope);
     return;
   }
 
@@ -87,10 +90,13 @@ export function syncPermissionInteractionState(
   };
 
   // Pending prompts exist only while the slot holds permissions.
-  deps.interactionManager.transition({
-    expectedInput: "callback",
-    metadata: nextMetadata,
-  });
+  deps.interactionManager.transition(
+    {
+      expectedInput: "callback",
+      metadata: nextMetadata,
+    },
+    scope,
+  );
 }
 
 /**
@@ -101,9 +107,13 @@ export async function showPermissionRequest(
   chatId: number,
   request: PermissionRequest,
   deps: PermissionMenuDeps,
-  generation: number = deps.permissionManager.getGeneration(),
+  generation?: number,
+  scope: string = DEFAULT_INTERACTION_SCOPE,
 ): Promise<void> {
   const { interactionManager, permissionManager, summaryAggregator } = deps;
+  // The epoch is read once, before the awaiting below, so a clear or a reset that
+  // lands meanwhile makes the prompt stale.
+  const requestGeneration = generation ?? permissionManager.getGeneration(scope);
   logger.debug(`[PermissionHandler] Showing permission request: ${request.permission}`);
 
   // Restores and the event stream can show one request side by side: an equivalent prompt
@@ -116,17 +126,17 @@ export async function showPermissionRequest(
     await inFlight;
   }
 
-  if (permissionManager.getDropReason(request, generation)) {
+  if (permissionManager.getDropReason(request, requestGeneration, scope)) {
     logger.debug(`[PermissionHandler] Skipping stale or already resolved request: ${request.id}`);
     return;
   }
 
-  if (permissionManager.hasRequest(request.id)) {
+  if (permissionManager.hasRequest(request.id, scope)) {
     logger.debug(`[PermissionHandler] Skipping request already on screen: ${request.id}`);
     return;
   }
 
-  const grouped = permissionManager.addEquivalentRequest(request, generation);
+  const grouped = permissionManager.addEquivalentRequest(request, requestGeneration, scope);
   if (grouped) {
     // Re-render the visible prompt so the user can see the answer will apply
     // to more than one pending request.
@@ -141,12 +151,16 @@ export async function showPermissionRequest(
         logger.warn("[PermissionHandler] Failed to update grouped permission message:", err);
       });
 
-    syncPermissionInteractionState(deps, {
-      requestID: request.id,
-      messageId: grouped.messageId,
-      deduplicated: true,
-      groupedCount: grouped.count,
-    });
+    syncPermissionInteractionState(
+      deps,
+      {
+        requestID: request.id,
+        messageId: grouped.messageId,
+        deduplicated: true,
+        groupedCount: grouped.count,
+      },
+      scope,
+    );
     summaryAggregator.stopTypingIndicator();
     return;
   }
@@ -161,11 +175,16 @@ export async function showPermissionRequest(
     });
 
     logger.debug(`[PermissionHandler] Message sent, messageId=${message.message_id}`);
-    const result = permissionManager.startPermission(request, message.message_id, generation);
+    const result = permissionManager.startPermission(
+      request,
+      message.message_id,
+      requestGeneration,
+      scope,
+    );
     if (result !== "started") {
       if (result === "question_active") {
         // A poll took the slot while this prompt was being sent: it waits for the poll.
-        interactionManager.waitPermission(request);
+        interactionManager.waitPermission(request, {}, scope);
       }
 
       await bot.deleteMessage(chatId, message.message_id).catch((err) => {
@@ -174,10 +193,14 @@ export async function showPermissionRequest(
       return;
     }
 
-    syncPermissionInteractionState(deps, {
-      requestID: request.id,
-      messageId: message.message_id,
-    });
+    syncPermissionInteractionState(
+      deps,
+      {
+        requestID: request.id,
+        messageId: message.message_id,
+      },
+      scope,
+    );
 
     summaryAggregator.stopTypingIndicator();
   } catch (err) {
@@ -198,6 +221,7 @@ export async function applyPermissionPromptChanges(
   chatId: number,
   changes: PermissionPromptChange[],
   deps: Pick<AppContainer, "interactionManager" | "permissionManager">,
+  scope: string = DEFAULT_INTERACTION_SCOPE,
 ): Promise<void> {
   for (const change of changes) {
     const edit = change.outcome
@@ -219,7 +243,7 @@ export async function applyPermissionPromptChanges(
   }
 
   if (changes.length > 0) {
-    syncPermissionInteractionState(deps);
+    syncPermissionInteractionState(deps, {}, scope);
   }
 }
 
@@ -232,6 +256,7 @@ export async function showPermissionDeliveryWarning(
   chatId: number,
   change: PermissionPromptChange,
   deps: Pick<AppContainer, "interactionManager" | "permissionManager">,
+  scope: string = DEFAULT_INTERACTION_SCOPE,
 ): Promise<void> {
   const warning = t("permission.delivery_failed");
 
@@ -245,7 +270,7 @@ export async function showPermissionDeliveryWarning(
   } catch (err) {
     if (isMessageNotModifiedError(err)) {
       // The warning from an earlier failed tap is still on the prompt.
-      syncPermissionInteractionState(deps);
+      syncPermissionInteractionState(deps, {}, scope);
       return;
     }
 
@@ -255,7 +280,7 @@ export async function showPermissionDeliveryWarning(
     });
   }
 
-  syncPermissionInteractionState(deps);
+  syncPermissionInteractionState(deps, {}, scope);
 }
 
 function isMessageNotModifiedError(error: unknown): boolean {

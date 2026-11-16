@@ -32,6 +32,7 @@ import {
   type PendingAttachment,
 } from "../../app/managers/prompt-attachment-manager.js";
 import { resolvePendingAttachment } from "../../app/services/prompt-attachment-service.js";
+import { getInteractionScope } from "../middleware/interaction-scope.js";
 import { getMissingFolderNotice } from "../../app/services/missing-folder-notice-service.js";
 import {
   downloadTelegramFile,
@@ -390,7 +391,7 @@ export async function processUserPrompt(
       assistantRunState.clearRun(currentSession.id, "session_prompt_handler_error");
     }
     logger.error("Error in prompt handler:", err);
-    if (interactionManager.getSnapshot()) {
+    if (interactionManager.getSnapshot(getInteractionScope(ctx))) {
       deps.resetInteractions("message_handler_error");
     }
     await ctx.reply(t("error.generic"));
@@ -421,7 +422,7 @@ async function consumePendingAttachment(
   attachment: PendingAttachment,
 ): Promise<void> {
   promptAttachment.clear("consumed");
-  deps.interactionManager.clear("attachment_consumed");
+  deps.interactionManager.clear("attachment_consumed", getInteractionScope(ctx));
   await retireAttachmentConfirmation(ctx, attachment.confirmationMessageId);
 }
 

@@ -109,9 +109,12 @@ beforeEach(() => {
   container = createTestAppContainer();
 });
 
+/** The scope every context in this file resolves to: chat 777 with no forum topic. */
+const SCOPE = "777:no-thread";
+
 describe("bot/commands/skills", () => {
   beforeEach(() => {
-    container.interactionManager.clear("test_setup");
+    container.interactionManager.clear("test_setup", SCOPE);
 
     mocked.currentProject = {
       id: "project-1",
@@ -147,7 +150,7 @@ describe("bot/commands/skills", () => {
     expect(options.reply_markup.inline_keyboard[2]?.[0]?.callback_data).toBe("skills:select:1");
     expect(options.reply_markup.inline_keyboard[3]?.[0]?.callback_data).toBe("skills:cancel");
 
-    const state = container.interactionManager.getSnapshot();
+    const state = container.interactionManager.getSnapshot(SCOPE);
     expect(state?.kind).toBe("custom");
     expect(state?.expectedInput).toBe("callback");
     expect(state?.metadata.flow).toBe("skills");
@@ -169,7 +172,7 @@ describe("bot/commands/skills", () => {
     const ctx = createCommandContext(124);
     await skillsCommand(ctx as never, createDeps());
 
-    const state = container.interactionManager.getSnapshot();
+    const state = container.interactionManager.getSnapshot(SCOPE);
     expect(state?.kind).toBe("custom");
     expect(state?.metadata.skills).toEqual([
       { name: "borsch", description: "Cook borsch" },
@@ -191,7 +194,7 @@ describe("bot/commands/skills", () => {
           { name: "release", description: "Prepare release" },
         ],
       },
-    });
+    }, SCOPE);
 
     const callbackCtx = createCallbackContext("skills:select:1", 321);
     const handled = await handleSkillsCallback(callbackCtx, createDeps());
@@ -202,7 +205,7 @@ describe("bot/commands/skills", () => {
       expect.objectContaining({ reply_markup: expect.any(Object) }),
     );
 
-    const state = container.interactionManager.getSnapshot();
+    const state = container.interactionManager.getSnapshot(SCOPE);
     expect(state?.kind).toBe("custom");
     expect(state?.expectedInput).toBe("mixed");
     expect(state?.metadata.stage).toBe("confirm");
@@ -220,14 +223,14 @@ describe("bot/commands/skills", () => {
         projectDirectory: "D:\\Projects\\Repo",
         skillName: "borsch",
       },
-    });
+    }, SCOPE);
 
     const ctx = createCallbackContext("skills:execute", 400);
     const deps = createDeps();
     const handled = await handleSkillsCallback(ctx, deps);
 
     expect(handled).toBe(true);
-    expect(container.interactionManager.getSnapshot()).toBeNull();
+    expect(container.interactionManager.getSnapshot(SCOPE)).toBeNull();
     expect(ctx.deleteMessage).toHaveBeenCalledTimes(1);
     expect(ctx.reply).toHaveBeenCalledWith(`${t("skills.executing_prefix")}\n/borsch`, {
       entities: [{ type: "code", offset: t("skills.executing_prefix").length + 1, length: 7 }],
@@ -246,14 +249,14 @@ describe("bot/commands/skills", () => {
         projectDirectory: "D:\\Projects\\Repo",
         skillName: "borsch",
       },
-    });
+    }, SCOPE);
 
     const ctx = createTextContext("with garlic buns");
     const deps = createDeps();
     const handled = await handleSkillTextArguments(ctx, deps);
 
     expect(handled).toBe(true);
-    expect(container.interactionManager.getSnapshot()).toBeNull();
+    expect(container.interactionManager.getSnapshot(SCOPE)).toBeNull();
     expect(ctx.api.deleteMessage).toHaveBeenCalledWith(777, 500);
     expect(ctx.reply).toHaveBeenCalledWith(
       `${t("skills.executing_prefix")}\n/borsch with garlic buns`,
@@ -279,7 +282,7 @@ describe("bot/commands/skills", () => {
         projectDirectory: "D:\\Projects\\Repo",
         skills: [{ name: "borsch", description: "Cook borsch" }],
       },
-    });
+    }, SCOPE);
 
     const ctx = createCallbackContext("skills:cancel", 999);
     const handled = await handleSkillsCallback(ctx, createDeps());
@@ -289,7 +292,7 @@ describe("bot/commands/skills", () => {
       text: t("skills.inactive_callback"),
       show_alert: true,
     });
-    expect(container.interactionManager.getSnapshot()?.kind).toBe("custom");
+    expect(container.interactionManager.getSnapshot(SCOPE)?.kind).toBe("custom");
   });
 
   it("handles next-page callback and renders second page", async () => {
@@ -309,7 +312,7 @@ describe("bot/commands/skills", () => {
         skills,
         page: 0,
       },
-    });
+    }, SCOPE);
 
     const ctx = createCallbackContext("skills:page:1", 800);
     const handled = await handleSkillsCallback(ctx, createDeps());
@@ -363,7 +366,7 @@ describe("bot/commands/skills", () => {
       const ctx = await openSearch();
       expect(ctx.deleteMessage).toHaveBeenCalledTimes(1);
       expect(ctx.reply).toHaveBeenCalledWith(t("skills.search.prompt"));
-      expect(container.interactionManager.getSnapshot()).toMatchObject({
+      expect(container.interactionManager.getSnapshot(SCOPE)).toMatchObject({
         kind: "custom",
         expectedInput: "text",
         allowedCommands: [],
@@ -390,7 +393,7 @@ describe("bot/commands/skills", () => {
         t("skills.search.results", { query: "  nEeDlE  " }),
         expect.objectContaining({ reply_markup: expect.anything() }),
       );
-      expect(container.interactionManager.getSnapshot()).toMatchObject({
+      expect(container.interactionManager.getSnapshot(SCOPE)).toMatchObject({
         expectedInput: "callback",
         allowedCommands: [],
         metadata: {
@@ -422,7 +425,7 @@ describe("bot/commands/skills", () => {
         ],
       ]);
       expect(mocked.commandListMock).toHaveBeenCalledTimes(3);
-      expect(container.interactionManager.getSnapshot()?.metadata.skills).toHaveLength(13);
+      expect(container.interactionManager.getSnapshot(SCOPE)?.metadata.skills).toHaveLength(13);
     });
 
     it("shows no results with only search again and cancel", async () => {
@@ -442,10 +445,10 @@ describe("bot/commands/skills", () => {
     it("silently waits on whitespace and caps the query including the heading at 100 characters", async () => {
       await openSearch();
       const whitespace = createTextContext("   ");
-      const before = container.interactionManager.getSnapshot();
+      const before = container.interactionManager.getSnapshot(SCOPE);
       await handleSkillsSearchTextInput(whitespace, createDeps());
       expect(whitespace.reply).not.toHaveBeenCalled();
-      expect(container.interactionManager.getSnapshot()).toEqual(before);
+      expect(container.interactionManager.getSnapshot(SCOPE)).toEqual(before);
       expect(mocked.commandListMock).toHaveBeenCalledTimes(1);
       const ctx = createTextContext("a".repeat(110));
       await handleSkillsSearchTextInput(ctx, createDeps());
@@ -453,18 +456,18 @@ describe("bot/commands/skills", () => {
         t("skills.search.no_results", { query: "a".repeat(100) }),
         expect.anything(),
       );
-      expect(container.interactionManager.getSnapshot()?.metadata.query).toHaveLength(100);
+      expect(container.interactionManager.getSnapshot(SCOPE)?.metadata.query).toHaveLength(100);
     });
 
     it("starts a new query after deleting results and makes their buttons inactive", async () => {
       await showResults();
-      const token = container.interactionManager.getSnapshot()?.metadata.token;
+      const token = container.interactionManager.getSnapshot(SCOPE)?.metadata.token;
       const ctx = createCallbackContext("skills:search:again", 903);
       await handleSkillsCallback(ctx, createDeps());
       expect(ctx.deleteMessage).toHaveBeenCalledTimes(1);
       expect(ctx.reply).toHaveBeenCalledWith(t("skills.search.prompt"));
-      expect(container.interactionManager.getSnapshot()?.metadata.stage).toBe("input");
-      expect(container.interactionManager.getSnapshot()?.metadata.token).not.toBe(token);
+      expect(container.interactionManager.getSnapshot(SCOPE)?.metadata.stage).toBe("input");
+      expect(container.interactionManager.getSnapshot(SCOPE)?.metadata.token).not.toBe(token);
       const stale = createCallbackContext("skills:search:result:0", 903);
       await handleSkillsCallback(stale, createDeps());
       expect(stale.answerCallbackQuery).toHaveBeenCalledWith({
@@ -477,7 +480,7 @@ describe("bot/commands/skills", () => {
       await showResults();
       const ctx = createCallbackContext("skills:search:cancel", 903);
       await handleSkillsCallback(ctx, createDeps());
-      expect(container.interactionManager.getSnapshot()).toBeNull();
+      expect(container.interactionManager.getSnapshot(SCOPE)).toBeNull();
       expect(ctx.answerCallbackQuery).toHaveBeenCalledWith({ text: t("common.cancelled") });
       expect(ctx.deleteMessage).toHaveBeenCalledTimes(1);
       expect(ctx.reply).not.toHaveBeenCalled();
@@ -496,7 +499,7 @@ describe("bot/commands/skills", () => {
         );
         expect(ctx.deleteMessage).not.toHaveBeenCalled();
         expect(mocked.processUserPromptMock).not.toHaveBeenCalled();
-        expect(container.interactionManager.getSnapshot()).toMatchObject({
+        expect(container.interactionManager.getSnapshot(SCOPE)).toMatchObject({
           expectedInput: "mixed",
           allowedCommands: expect.arrayContaining(["/help", "/status", "/abort"]),
           metadata: { flow: "skills", stage: "confirm", skillName: "skill-11", messageId: 903 },
@@ -523,13 +526,13 @@ describe("bot/commands/skills", () => {
       const ctx = createTextContext("skill");
       await handleSkillsSearchTextInput(ctx, createDeps());
       expect(ctx.reply).toHaveBeenCalledWith(t("skills.fetch_error"));
-      expect(container.interactionManager.getSnapshot()).toBeNull();
+      expect(container.interactionManager.getSnapshot(SCOPE)).toBeNull();
       expect(ctx.deleteMessage).not.toHaveBeenCalled();
     });
 
     it("keeps results available when loading another page fails", async () => {
       await showResults();
-      const before = container.interactionManager.getSnapshot();
+      const before = container.interactionManager.getSnapshot(SCOPE);
       mocked.commandListMock.mockRejectedValueOnce(new Error("offline"));
       const ctx = createCallbackContext("skills:search:page:1", 903);
       await handleSkillsCallback(ctx, createDeps());
@@ -537,7 +540,7 @@ describe("bot/commands/skills", () => {
         text: t("skills.page_load_error_callback"),
       });
       expect(ctx.editMessageText).not.toHaveBeenCalled();
-      expect(container.interactionManager.getSnapshot()).toEqual(before);
+      expect(container.interactionManager.getSnapshot(SCOPE)).toEqual(before);
     });
 
     it.each(["input", "page"])(
@@ -545,7 +548,7 @@ describe("bot/commands/skills", () => {
       async (stage) => {
         if (stage === "input") await openSearch();
         else await showResults();
-        const before = container.interactionManager.getSnapshot();
+        const before = container.interactionManager.getSnapshot(SCOPE);
         mocked.commandListMock.mockImplementationOnce(async () => {
           container.foregroundSessionState.markBusy("session-1", "D:\\Projects\\Repo");
           return { data: catalog, error: null };
@@ -562,7 +565,7 @@ describe("bot/commands/skills", () => {
           expect(ctx.reply).not.toHaveBeenCalled();
         }
         expect(ctx.editMessageText).not.toHaveBeenCalled();
-        expect(container.interactionManager.getSnapshot()).toEqual(before);
+        expect(container.interactionManager.getSnapshot(SCOPE)).toEqual(before);
         expect(mocked.processUserPromptMock).not.toHaveBeenCalled();
       },
     );
@@ -571,8 +574,12 @@ describe("bot/commands/skills", () => {
       "does not resume after a %s replaces results",
       async (kind) => {
         await showResults();
-        startInteractionForTest(container.interactionManager, { kind, expectedInput: "callback" });
-        const before = container.interactionManager.getSnapshot();
+        startInteractionForTest(
+          container.interactionManager,
+          { kind, expectedInput: "callback" },
+          SCOPE,
+        );
+        const before = container.interactionManager.getSnapshot(SCOPE);
         const ctx = createCallbackContext("skills:search:result:0", 903);
         await handleSkillsCallback(ctx, createDeps());
         expect(ctx.answerCallbackQuery).toHaveBeenCalledWith({
@@ -581,7 +588,7 @@ describe("bot/commands/skills", () => {
         });
         expect(ctx.editMessageText).not.toHaveBeenCalled();
         expect(ctx.deleteMessage).not.toHaveBeenCalled();
-        expect(container.interactionManager.getSnapshot()).toEqual(before);
+        expect(container.interactionManager.getSnapshot(SCOPE)).toEqual(before);
         container.interactionManager.clear("agent_request_ended");
         expect(await handleSkillsSearchTextInput(createTextContext("skill"), createDeps())).toBe(false);
       },
@@ -590,10 +597,15 @@ describe("bot/commands/skills", () => {
     it.each([
       "load", "send", "page load", "page edit", "selection edit", "start delete", "again delete",
     ])("does not overwrite a replacement interaction during %s", async (boundary) => {
-      const replace = () => startInteractionForTest(container.interactionManager, {
-        kind: "permission",
-        expectedInput: "callback",
-      });
+      const replace = () =>
+        startInteractionForTest(
+          container.interactionManager,
+          {
+            kind: "permission",
+            expectedInput: "callback",
+          },
+          SCOPE,
+        );
       if (boundary === "start delete") {
         await skillsCommand(createCommandContext(100) as never, createDeps());
         const ctx = createCallbackContext("skills:search", 100);
@@ -644,7 +656,7 @@ describe("bot/commands/skills", () => {
         await handleSkillsCallback(ctx, createDeps());
         if (boundary === "page load") expect(ctx.editMessageText).not.toHaveBeenCalled();
       }
-      expect(container.interactionManager.getSnapshot()?.kind).toBe("permission");
+      expect(container.interactionManager.getSnapshot(SCOPE)?.kind).toBe("permission");
     });
 
     it.each(["search", "search:page:1", "search:result:0", "search:again", "search:cancel"])(
@@ -652,13 +664,13 @@ describe("bot/commands/skills", () => {
       async (suffix) => {
         await showResults();
         container.foregroundSessionState.markBusy("session-1", "D:\\Projects\\Repo");
-        const before = container.interactionManager.getSnapshot();
+        const before = container.interactionManager.getSnapshot(SCOPE);
         const ctx = createCallbackContext(`skills:${suffix}`, 903);
         await handleSkillsCallback(ctx, createDeps());
         expect(ctx.answerCallbackQuery).toHaveBeenCalledWith({ text: t("bot.session_busy") });
         expect(ctx.editMessageText).not.toHaveBeenCalled();
         expect(ctx.deleteMessage).not.toHaveBeenCalled();
-        expect(container.interactionManager.getSnapshot()).toEqual(before);
+        expect(container.interactionManager.getSnapshot(SCOPE)).toEqual(before);
       },
     );
 
@@ -668,11 +680,15 @@ describe("bot/commands/skills", () => {
         await showResults();
         const ctx = createCallbackContext("skills:search:result:0", 903);
         vi.mocked(ctx.editMessageText).mockImplementationOnce(async () => {
-          startInteractionForTest(container.interactionManager, { kind, expectedInput: "callback" });
+          startInteractionForTest(
+            container.interactionManager,
+            { kind, expectedInput: "callback" },
+            SCOPE,
+          );
           throw new Error("Telegram edit failed");
         });
         await expect(handleSkillsCallback(ctx, createDeps())).resolves.toBe(true);
-        expect(container.interactionManager.getSnapshot()?.kind).toBe(kind);
+        expect(container.interactionManager.getSnapshot(SCOPE)?.kind).toBe(kind);
         expect(ctx.deleteMessage).not.toHaveBeenCalled();
         expect(mocked.processUserPromptMock).not.toHaveBeenCalled();
       },
@@ -683,7 +699,7 @@ describe("bot/commands/skills", () => {
       const ctx = createCallbackContext("skills:search:result:0", 903);
       vi.mocked(ctx.editMessageText).mockRejectedValueOnce(new Error("Telegram edit failed"));
       await expect(handleSkillsCallback(ctx, createDeps())).resolves.toBe(true);
-      expect(container.interactionManager.getSnapshot()).toBeNull();
+      expect(container.interactionManager.getSnapshot(SCOPE)).toBeNull();
       expect(ctx.answerCallbackQuery).toHaveBeenCalledWith({ text: t("callback.processing_error") });
       expect(mocked.processUserPromptMock).not.toHaveBeenCalled();
     });
@@ -694,7 +710,7 @@ describe("bot/commands/skills", () => {
       await skillsCommand(ctx as never, createDeps());
       expect(ctx.reply).toHaveBeenCalledWith(t("bot.session_busy"));
       expect(mocked.commandListMock).not.toHaveBeenCalled();
-      expect(container.interactionManager.getSnapshot()).toBeNull();
+      expect(container.interactionManager.getSnapshot(SCOPE)).toBeNull();
     });
 
     it.each(["no project", "empty catalog", "catalog error"])(
@@ -709,7 +725,7 @@ describe("bot/commands/skills", () => {
           ? "bot.project_not_selected"
           : reason === "empty catalog" ? "skills.empty" : "skills.fetch_error";
         expect(ctx.reply).toHaveBeenCalledWith(t(key));
-        expect(container.interactionManager.getSnapshot()).toBeNull();
+        expect(container.interactionManager.getSnapshot(SCOPE)).toBeNull();
       },
     );
 

@@ -23,6 +23,7 @@ import {
   ensureActiveInlineMenu,
 } from "../menus/inline-menu.js";
 import { showVariantSelectionMenuAfterModelChange } from "../menus/variant-selection-menu.js";
+import { getInteractionScope } from "../middleware/interaction-scope.js";
 import {
   buildModelRootMenuView,
   buildProviderModelsMenuView,
@@ -87,8 +88,8 @@ function parseModelItems(value: unknown): ModelInfo[] {
   });
 }
 
-function parseModelSearchMetadata(deps: ModelSelectionDeps): ModelSearchMetadata | null {
-  const state = deps.interactionManager.getSnapshot();
+function parseModelSearchMetadata(deps: ModelSelectionDeps, scope: string): ModelSearchMetadata | null {
+  const state = deps.interactionManager.getSnapshot(scope);
   if (!state || state.kind !== "custom") {
     return null;
   }
@@ -107,8 +108,8 @@ function parseModelSearchMetadata(deps: ModelSelectionDeps): ModelSearchMetadata
   return { flow, stage, messageId, query, models: parseModelItems(state.metadata.models) };
 }
 
-function parseModelListMetadata(deps: ModelSelectionDeps): ModelListMetadata | null {
-  const state = deps.interactionManager.getSnapshot();
+function parseModelListMetadata(deps: ModelSelectionDeps, scope: string): ModelListMetadata | null {
+  const state = deps.interactionManager.getSnapshot(scope);
   if (!state || state.kind !== "inline" || state.metadata.menuKind !== "model") {
     return null;
   }
@@ -145,7 +146,11 @@ function parseCallbackIndex(data: string, prefix: string): number | null {
   return parseNonNegativeIndex(data.slice(prefix.length));
 }
 
-function resolveModelListCallback(deps: ModelSelectionDeps, data: string): ModelInfo | null {
+function resolveModelListCallback(
+  deps: ModelSelectionDeps,
+  scope: string,
+  data: string,
+): ModelInfo | null {
   if (!data.startsWith(MODEL_LIST_CALLBACK_PREFIX)) {
     return null;
   }
@@ -164,7 +169,7 @@ function resolveModelListCallback(deps: ModelSelectionDeps, data: string): Model
     return null;
   }
 
-  const lists = parseModelListMetadata(deps);
+  const lists = parseModelListMetadata(deps, scope);
   if (!lists) {
     return null;
   }
@@ -249,8 +254,11 @@ interface ProviderBrowserMetadata {
   models: ModelInfo[];
 }
 
-function parseProviderBrowserMetadata(deps: ModelSelectionDeps): ProviderBrowserMetadata | null {
-  const state = deps.interactionManager.getSnapshot();
+function parseProviderBrowserMetadata(
+  deps: ModelSelectionDeps,
+  scope: string,
+): ProviderBrowserMetadata | null {
+  const state = deps.interactionManager.getSnapshot(scope);
   if (!state || state.kind !== "inline" || state.metadata.menuKind !== "model") {
     return null;
   }
@@ -269,18 +277,22 @@ function parseProviderBrowserMetadata(deps: ModelSelectionDeps): ProviderBrowser
 
 function updateModelMenuMetadata(
   deps: ModelSelectionDeps,
+  scope: string,
   metadata: Record<string, unknown>,
 ): void {
-  const state = deps.interactionManager.getSnapshot();
+  const state = deps.interactionManager.getSnapshot(scope);
 
-  deps.interactionManager.transition({
-    expectedInput: "callback",
-    metadata: {
-      ...metadata,
-      menuKind: "model",
-      messageId: state?.metadata.messageId,
+  deps.interactionManager.transition(
+    {
+      expectedInput: "callback",
+      metadata: {
+        ...metadata,
+        menuKind: "model",
+        messageId: state?.metadata.messageId,
+      },
     },
-  });
+    scope,
+  );
 }
 
 async function renderModelMenuScreen(
@@ -302,7 +314,7 @@ async function showProvidersScreen(
   const view = buildProvidersMenuView(providers, page);
 
   await renderModelMenuScreen(ctx, view);
-  updateModelMenuMetadata(deps, { providers, providersPage: view.page });
+  updateModelMenuMetadata(deps, getInteractionScope(ctx), { providers, providersPage: view.page });
 }
 
 async function showModelRootScreen(ctx: Context, deps: ModelSelectionDeps): Promise<void> {
@@ -310,7 +322,7 @@ async function showModelRootScreen(ctx: Context, deps: ModelSelectionDeps): Prom
   const view = await buildModelRootMenuView(fetchCurrentModel(), modelLists);
 
   await renderModelMenuScreen(ctx, view);
-  updateModelMenuMetadata(deps, { modelLists });
+  updateModelMenuMetadata(deps, getInteractionScope(ctx), { modelLists });
 }
 
 async function showProviderModelsScreen(
@@ -332,7 +344,7 @@ async function showProviderModelsScreen(
   );
 
   await renderModelMenuScreen(ctx, view);
-  updateModelMenuMetadata(deps, {
+  updateModelMenuMetadata(deps, getInteractionScope(ctx), {
     providers: meta.providers,
     providersPage: meta.providersPage,
     providerIndex,
@@ -370,24 +382,28 @@ function buildModelSearchResultsView(
 
 function transitionToModelSearchResults(
   deps: ModelSelectionDeps,
+  scope: string,
   query: string,
   messageId: number | undefined,
   results: FavoriteModel[],
 ): void {
-  deps.interactionManager.transition({
-    expectedInput: "callback",
-    metadata: {
-      flow: "model-search",
-      stage: "results",
-      messageId,
-      query,
-      models: results.map((model) => ({
-        providerID: model.providerID,
-        modelID: model.modelID,
-        variant: "default",
-      })),
+  deps.interactionManager.transition(
+    {
+      expectedInput: "callback",
+      metadata: {
+        flow: "model-search",
+        stage: "results",
+        messageId,
+        query,
+        models: results.map((model) => ({
+          providerID: model.providerID,
+          modelID: model.modelID,
+          variant: "default",
+        })),
+      },
     },
-  });
+    scope,
+  );
 }
 
 async function showModelSearchResultsAgain(
@@ -400,7 +416,7 @@ async function showModelSearchResultsAgain(
 
   await ctx.answerCallbackQuery().catch(() => {});
   await ctx.editMessageText(view.text, { reply_markup: view.keyboard });
-  transitionToModelSearchResults(deps, meta.query, meta.messageId, results);
+  transitionToModelSearchResults(deps, getInteractionScope(ctx), meta.query, meta.messageId, results);
 }
 
 // A model can leave OpenCode after the menu showing it was drawn. When the list cannot be
@@ -500,14 +516,14 @@ export async function handleModelSelect(ctx: Context, deps: ModelSelectionDeps):
   logger.debug(`[ModelHandler] Received callback: ${callbackQuery.data}`);
 
   try {
-    const modelInfo = resolveModelListCallback(deps, callbackQuery.data);
+    const modelInfo = resolveModelListCallback(deps, getInteractionScope(ctx), callbackQuery.data);
     const shouldUseLegacyFallback = !isShortModelCallback(callbackQuery.data);
     const resolvedModelInfo =
       modelInfo ?? (shouldUseLegacyFallback ? parseLegacyModelCallback(callbackQuery.data) : null);
 
     if (!resolvedModelInfo) {
       logger.error(`[ModelHandler] Invalid callback data format: ${callbackQuery.data}`);
-      clearActiveInlineMenu("model_select_invalid_callback", deps);
+      clearActiveInlineMenu("model_select_invalid_callback", ctx, deps);
       await ctx.answerCallbackQuery({ text: t("model.change_error_callback") }).catch(() => {});
       return true;
     }
@@ -517,12 +533,12 @@ export async function handleModelSelect(ctx: Context, deps: ModelSelectionDeps):
       return true;
     }
 
-    clearActiveInlineMenu("model_selected", deps);
+    clearActiveInlineMenu("model_selected", ctx, deps);
     await applyModelSelectionAndNotify(ctx, deps, resolvedModelInfo);
 
     return true;
   } catch (err) {
-    clearActiveInlineMenu("model_select_error", deps);
+    clearActiveInlineMenu("model_select_error", ctx, deps);
     logger.error("[ModelHandler] Error handling model select:", err);
     await failure(ctx, "model.change_error_callback");
     return true;
@@ -567,7 +583,7 @@ export async function handleModelProvidersCallback(
 
     const providerCallback = parseProviderCallback(data);
     if (providerCallback) {
-      const meta = parseProviderBrowserMetadata(deps);
+      const meta = parseProviderBrowserMetadata(deps, getInteractionScope(ctx));
       const provider = meta?.providers[providerCallback.providerIndex];
 
       if (!provider) {
@@ -591,7 +607,7 @@ export async function handleModelProvidersCallback(
 
     const modelIndex = parseProviderModelCallback(data);
     if (modelIndex !== null) {
-      const meta = parseProviderBrowserMetadata(deps);
+      const meta = parseProviderBrowserMetadata(deps, getInteractionScope(ctx));
       const modelInfo = meta?.models[modelIndex];
 
       if (!modelInfo) {
@@ -618,7 +634,7 @@ export async function handleModelProvidersCallback(
         return true;
       }
 
-      clearActiveInlineMenu("model_selected", deps);
+      clearActiveInlineMenu("model_selected", ctx, deps);
       await applyModelSelectionAndNotify(ctx, deps, modelInfo);
       return true;
     }
@@ -658,14 +674,17 @@ export async function handleModelSearchCallback(
 
   // Start a new interaction for search text input
   // deps.interactionManager.start() clears any existing interaction automatically
-  deps.interactionManager.start({
-    kind: "custom",
-    expectedInput: "text",
-    metadata: {
-      flow: "model-search",
-      stage: "input",
+  deps.interactionManager.start(
+    {
+      kind: "custom",
+      expectedInput: "text",
+      metadata: {
+        flow: "model-search",
+        stage: "input",
+      },
     },
-  });
+    getInteractionScope(ctx),
+  );
 
   await ctx.reply(t("model.search.prompt"));
 
@@ -681,7 +700,7 @@ export async function handleModelSearchTextInput(
   ctx: Context,
   deps: ModelSelectionDeps,
 ): Promise<boolean> {
-  const meta = parseModelSearchMetadata(deps);
+  const meta = parseModelSearchMetadata(deps, getInteractionScope(ctx));
   if (!meta || meta.stage !== "input") {
     return false;
   }
@@ -704,13 +723,13 @@ export async function handleModelSearchTextInput(
     const sent = await ctx.reply(view.text, { reply_markup: view.keyboard });
 
     // Transition to results stage (callback-only)
-    transitionToModelSearchResults(deps, text, sent.message_id, results);
+    transitionToModelSearchResults(deps, getInteractionScope(ctx), text, sent.message_id, results);
 
     return true;
   } catch (err) {
     logger.error("[ModelHandler] Model search error:", err);
     await ctx.reply(t("model.search.error"));
-    deps.interactionManager.clear("model_search_error");
+    deps.interactionManager.clear("model_search_error", getInteractionScope(ctx));
     return true;
   }
 }
@@ -730,7 +749,7 @@ export async function handleModelSearchResults(
     return false;
   }
 
-  const meta = parseModelSearchMetadata(deps);
+  const meta = parseModelSearchMetadata(deps, getInteractionScope(ctx));
   if (!meta || meta.stage !== "results") {
     return false;
   }
@@ -746,7 +765,7 @@ export async function handleModelSearchResults(
 
   // Cancel
   if (data === MODEL_SEARCH_CANCEL_CALLBACK) {
-    deps.interactionManager.clear("model_search_cancelled");
+    deps.interactionManager.clear("model_search_cancelled", getInteractionScope(ctx));
     await cancelMenu(ctx);
     return true;
   }
@@ -756,14 +775,17 @@ export async function handleModelSearchResults(
     await ctx.answerCallbackQuery().catch(() => {});
     await ctx.deleteMessage().catch(() => {});
 
-    deps.interactionManager.start({
-      kind: "custom",
-      expectedInput: "text",
-      metadata: {
-        flow: "model-search",
-        stage: "input",
+    deps.interactionManager.start(
+      {
+        kind: "custom",
+        expectedInput: "text",
+        metadata: {
+          flow: "model-search",
+          stage: "input",
+        },
       },
-    });
+      getInteractionScope(ctx),
+    );
 
     await ctx.reply(t("model.search.prompt"));
 
@@ -784,7 +806,7 @@ export async function handleModelSearchResults(
       return true;
     }
 
-    deps.interactionManager.clear("model_search_selected");
+    deps.interactionManager.clear("model_search_selected", getInteractionScope(ctx));
     await applyModelSelectionAndNotify(ctx, deps, modelInfo);
     return true;
   }
@@ -807,7 +829,7 @@ export async function handleModelSearchResults(
       return true;
     }
 
-    deps.interactionManager.clear("model_search_selected");
+    deps.interactionManager.clear("model_search_selected", getInteractionScope(ctx));
     await applyModelSelectionAndNotify(ctx, deps, modelInfo);
     return true;
   }
