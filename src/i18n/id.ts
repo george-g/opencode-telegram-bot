@@ -230,7 +230,6 @@ export const id: I18nDictionary = {
   "sessions.button.prev_page": "⬅️ Sebelumnya",
   "sessions.button.next_page": "Berikutnya ➡️",
   "sessions.loading_context": "⏳ Memuat konteks dan pesan terbaru...",
-  "sessions.selected": "✅ Sesi dipilih: {title}",
   "sessions.select_error": "🔴 Gagal memilih sesi.",
   "sessions.topic_create_failed":
     "⚠️ Gagal membuat topik forum — pastikan grup ini adalah forum dan bot memiliki izin Mengelola Topik. Kami lanjutkan di chat ini tanpa topik.",

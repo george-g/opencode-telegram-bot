@@ -2574,12 +2574,19 @@ describe("bot/services/event-subscription-service", () => {
 
     await vi.waitFor(
       () => {
-        expect(api.sendMessage).toHaveBeenCalledTimes(1);
+        expect(api.sendMessage).toHaveBeenCalledTimes(2);
       },
       { timeout: 3000 },
     );
 
-    const [chatId, text, options] = defined(api.sendMessage.mock.calls[0]);
+    // A topic opens each reply with its context line: model and context size.
+    const [contextChatId, contextText, contextOptions] = defined(api.sendMessage.mock.calls[0]);
+    expect(contextChatId).toBe(100);
+    expect(contextText).toContain("test-provider/test-model");
+    expect(contextText).toContain("Context:");
+    expect(contextOptions).toMatchObject({ message_thread_id: 55 });
+
+    const [chatId, text, options] = defined(api.sendMessage.mock.calls[1]);
     expect(chatId).toBe(100);
     expect(text).toBe("Final answer");
     expect(options).toMatchObject({ message_thread_id: 55 });
@@ -2627,6 +2634,40 @@ describe("bot/services/event-subscription-service", () => {
     const [chatId, , options] = defined(api.sendMessage.mock.calls[0]);
     expect(chatId).toBe(42);
     expect(options?.message_thread_id).toBeUndefined();
+  });
+
+  it("sends the context line once when a stream updates the same message", async () => {
+    const { api, summaryAggregator } = await setupService(true, {
+      responseStreamingMode: "edit",
+      showAssistantRunFooter: false,
+      startAssistantRun: true,
+    });
+
+    await registerTopicBinding({
+      chatId: 100,
+      threadId: 55,
+      sessionId: "session-1",
+      directory: "D:/repo",
+      topicName: "Feature work",
+    });
+
+    useTrackerFakeTimers();
+
+    // The first partial opens the reply: the context line comes with it.
+    emitAssistantTextPart(summaryAggregator, "First part");
+    await flushPendingDispatch();
+
+    // A later partial is the same reply, so it must not announce the context again.
+    emitAssistantTextPart(summaryAggregator, "First part updated");
+    await flushPendingDispatch();
+
+    const contextSends = api.sendMessage.mock.calls.filter((call) =>
+      String(call[1]).includes("Context:"),
+    );
+    expect(contextSends).toHaveLength(1);
+    const [contextChatId, , contextOptions] = defined(contextSends[0]);
+    expect(contextChatId).toBe(100);
+    expect(contextOptions).toMatchObject({ message_thread_id: 55 });
   });
 
   describe("draft text before a question or permission prompt", () => {

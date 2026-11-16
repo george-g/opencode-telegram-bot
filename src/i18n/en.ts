@@ -231,7 +231,6 @@ export const en = {
   "sessions.button.prev_page": "⬅️ Prev",
   "sessions.button.next_page": "Next ➡️",
   "sessions.loading_context": "⏳ Loading context and latest messages...",
-  "sessions.selected": "✅ Session selected: {title}",
   "sessions.select_error": "🔴 Failed to select session.",
   "sessions.topic_create_failed":
     "⚠️ Could not create a forum topic — make sure this group is a forum and the bot has the Manage Topics right. Continuing in this chat without a topic.",

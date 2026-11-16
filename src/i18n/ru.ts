@@ -232,7 +232,6 @@ export const ru: I18nDictionary = {
   "sessions.button.prev_page": "⬅️ Назад",
   "sessions.button.next_page": "Вперёд ➡️",
   "sessions.loading_context": "⏳ Загружаю контекст и последние сообщения...",
-  "sessions.selected": "✅ Сессия выбрана: {title}",
   "sessions.select_error": "🔴 Ошибка при выборе сессии.",
   "sessions.topic_create_failed":
     "⚠️ Не удалось создать тему — проверь, что группа форумная и у бота есть право Manage Topics. Продолжаем в этом чате без темы.",

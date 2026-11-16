@@ -48,6 +48,12 @@ export interface CompactActivity {
   activity: string;
 }
 
+/** The context size last seen for a session, and its model's limit once known. */
+export interface SessionContextUsage {
+  tokensUsed: number;
+  tokensLimit: number | null;
+}
+
 /** What output that began after a reply's text waits for before it opens a new message. */
 export type ReplyGate = () => Promise<void>;
 
@@ -108,6 +114,9 @@ export class SessionRuntimeState {
   private readonly assistantCompletionsStarted = new Set<string>();
   // `edit` replies whose text has begun: output that starts after it goes below the reply.
   private readonly begunReplies = new Set<string>();
+  // The announcement of each reply that already has one: a topic sends its
+  // context line once, before the reply's first part.
+  private readonly replyAnnouncements = new Map<string, Promise<void>>();
   // Per session: settling the output that came before the latest reply's text, and the
   // compact-mode wait before a reply's first partial reaches its stream.
   private readonly replyCuts = new Map<string, Promise<void>>();
@@ -122,6 +131,10 @@ export class SessionRuntimeState {
   private readonly completedToolDurations = new Map<string, number>();
   private readonly compactActivityBySession = new Map<string, CompactActivity>();
   private readonly subagentSnapshots = new Map<string, SubagentInfo[]>();
+  // Context size per session: the pinned dashboard keeps one session, a topic needs its own.
+  private readonly sessionContextUsage = new Map<string, SessionContextUsage>();
+  // Sessions whose context limit is being read now: each session asks at most once.
+  private readonly contextLimitRequests = new Set<string>();
 
   constructor({ policy, getReplyKeyboard }: SessionRuntimeStateOptions) {
     this.policy = policy;
@@ -273,6 +286,7 @@ export class SessionRuntimeState {
     options?: Parameters<ResponseStreamer["complete"]>[3],
   ) {
     const mode = this.getAssistantStreamMode(sessionId, messageId);
+    await this.awaitReplyAnnouncement(sessionId, messageId);
     const result = await this.getAssistantStreamer(mode).complete(
       sessionId,
       messageId,
@@ -296,6 +310,7 @@ export class SessionRuntimeState {
   ) {
     const mode = this.getAssistantStreamMode(sessionId, messageId);
     this.assistantStreamModes.set(sessionKey(sessionId, messageId), mode);
+    await this.awaitReplyAnnouncement(sessionId, messageId);
     return this.getAssistantStreamer(mode).complete(sessionId, messageId, payload, options);
   }
 
@@ -442,6 +457,9 @@ export class SessionRuntimeState {
     this.replyCuts.delete(sessionId);
     this.replyEnqueueDeferrals.delete(sessionId);
     this.compactCloseDue.delete(sessionId);
+    deleteSessionKeys(this.replyAnnouncements, sessionId);
+    this.sessionContextUsage.delete(sessionId);
+    this.contextLimitRequests.delete(sessionId);
     this.assistantEditStreamer.clearSession(sessionId, reason);
     this.assistantDraftStreamer.clearSession(sessionId, reason);
   }
@@ -461,6 +479,41 @@ export class SessionRuntimeState {
 
   markReplyBegun(sessionId: string, messageId: string): void {
     this.begunReplies.add(sessionKey(sessionId, messageId));
+  }
+
+  /**
+   * The promise that announces a reply before its first part on screen. The
+   * first caller creates the announcement; every caller waits for that same
+   * one. A topic sends its context line through this gate.
+   */
+  ensureReplyAnnouncement(
+    sessionId: string,
+    messageId: string,
+    announce: () => Promise<void>,
+  ): Promise<void> {
+    const key = sessionKey(sessionId, messageId);
+    const existing = this.replyAnnouncements.get(key);
+    if (existing) {
+      return existing;
+    }
+
+    // The announcement is never awaited on its own: a failure must not hold the reply back.
+    const announcement = announce().catch((error) => {
+      logger.error(
+        `[Bot] Failed to announce a reply: session=${sessionId}, message=${messageId}`,
+        error,
+      );
+    });
+    this.replyAnnouncements.set(key, announcement);
+    return announcement;
+  }
+
+  /**
+   * Waits for a reply's announcement when one exists. Completion calls this so
+   * the context line never lands after the reply's final text.
+   */
+  async awaitReplyAnnouncement(sessionId: string, messageId: string): Promise<void> {
+    await this.replyAnnouncements.get(sessionKey(sessionId, messageId));
   }
 
   /**
@@ -484,6 +537,14 @@ export class SessionRuntimeState {
         this.replyCuts.delete(sessionId);
       }
     });
+  }
+
+  /**
+   * Waits for the cut that settles the output before a reply, when one runs.
+   * A context line uses this so it lands below that output and above the reply.
+   */
+  async awaitReplyCut(sessionId: string): Promise<void> {
+    await this.replyCuts.get(sessionId);
   }
 
   setReplyEnqueueDeferral(sessionId: string, deferral: Promise<void>): void {
@@ -644,6 +705,41 @@ export class SessionRuntimeState {
     this.compactActivityBySession.set(sessionId, activity);
   }
 
+  /** The session's last known context size; the limit stays null until it is read. */
+  getSessionContextUsage(sessionId: string): SessionContextUsage | undefined {
+    return this.sessionContextUsage.get(sessionId);
+  }
+
+  /**
+   * Records a token report for one session. A report carries the used tokens
+   * only, so an earlier limit is kept.
+   */
+  setSessionTokensUsed(sessionId: string, tokensUsed: number): void {
+    const previous = this.sessionContextUsage.get(sessionId);
+    this.sessionContextUsage.set(sessionId, {
+      tokensUsed,
+      tokensLimit: previous?.tokensLimit ?? null,
+    });
+  }
+
+  setSessionContextLimit(sessionId: string, tokensLimit: number): void {
+    const previous = this.sessionContextUsage.get(sessionId);
+    this.sessionContextUsage.set(sessionId, {
+      tokensUsed: previous?.tokensUsed ?? 0,
+      tokensLimit,
+    });
+  }
+
+  /** True for the first caller of a session; a later caller gets false. */
+  beginSessionContextLimitRequest(sessionId: string): boolean {
+    if (this.contextLimitRequests.has(sessionId)) {
+      return false;
+    }
+
+    this.contextLimitRequests.add(sessionId);
+    return true;
+  }
+
   getSubagentSnapshot(sessionId: string): SubagentInfo[] | undefined {
     return this.subagentSnapshots.get(sessionId);
   }
@@ -767,6 +863,7 @@ export class SessionRuntimeState {
     for (const gate of this.replyDocumentGates.values()) gate.release();
     this.replyDocumentGates.clear();
     this.begunReplies.clear();
+    this.replyAnnouncements.clear();
     this.replyCuts.clear();
     this.replyEnqueueDeferrals.clear();
     this.compactCloseDue.clear();
@@ -781,6 +878,8 @@ export class SessionRuntimeState {
     this.completedToolDurations.clear();
     this.compactActivityBySession.clear();
     this.subagentSnapshots.clear();
+    this.sessionContextUsage.clear();
+    this.contextLimitRequests.clear();
   }
 
   /** Full reset: all output, queued completion work and draft numbering. */
@@ -796,6 +895,7 @@ export class SessionRuntimeState {
     this.assistantLatestTexts.delete(key);
     this.assistantDeliveredTexts.delete(key);
     this.begunReplies.delete(key);
+    this.replyAnnouncements.delete(key);
   }
 
   private getAssistantStreamer(mode: ResponseStreamingMode): ResponseStreamer {

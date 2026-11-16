@@ -26,6 +26,8 @@ import { telegramOutageNoticeService } from "../../../app/services/telegram-outa
 import { flushTelegramOutageNotices } from "../../telegram-outage-notices.js";
 import { getThinkingStreamId, type SessionRuntimeState } from "../session-runtime-state.js";
 import { hasMarkdownImages } from "../../render/block-parser.js";
+import { sendAssistantContextLine } from "../../messages/assistant-context-line.js";
+import type { SessionTargetPolicy } from "../telegram-event-delivery.js";
 import type { StreamingMessagePayload } from "../../streaming/response-streamer.js";
 import {
   prepareAssistantDocuments,
@@ -252,12 +254,30 @@ export function keepAssistantDraftsBeforePrompt(
 
 function enqueueAssistantReply(
   runtime: SessionRuntimeState,
+  policy: SessionTargetPolicy,
   sessionId: string,
   messageId: string,
   payload: StreamingMessagePayload,
 ): void {
+  /**
+   * A bound topic opens each new reply with its context line. The line is
+   * announced once per reply, and the reply's first part waits for it. A chat
+   * without a topic enqueues at once, exactly as before.
+   */
   const enqueue = (): void => {
-    runtime.enqueueAssistantResponse(sessionId, messageId, payload);
+    const destination = policy.getDestination(sessionId);
+    if (!destination || destination.messageThreadId === undefined) {
+      runtime.enqueueAssistantResponse(sessionId, messageId, payload);
+      return;
+    }
+
+    void runtime
+      .ensureReplyAnnouncement(sessionId, messageId, async () => {
+        // Output that came before this reply settles first: the line goes below it.
+        await runtime.awaitReplyCut(sessionId);
+        await sendAssistantContextLine(runtime, destination, sessionId);
+      })
+      .then(() => runtime.enqueueAssistantResponse(sessionId, messageId, payload));
   };
 
   if (!isCompactProgressMode()) {
@@ -378,7 +398,7 @@ export function registerAssistantResponseHandlers(deps: AssistantResponseDeps): 
     preparedStreamPayload.editOptions = undefined;
 
     beginEditReply(runtime, sessionId, messageId);
-    enqueueAssistantReply(runtime, sessionId, messageId, preparedStreamPayload);
+    enqueueAssistantReply(runtime, policy, sessionId, messageId, preparedStreamPayload);
   });
 
   summaryAggregator.setOnAssistantStep((sessionId, step) => {
@@ -479,6 +499,16 @@ export function registerAssistantResponseHandlers(deps: AssistantResponseDeps): 
         // A pending snapshot may itself wait on this reply's document gate.
         if (!hasDocumentLinks) await runtime.todoSnapshots.flush(sessionId);
 
+        // A topic opens every reply with its context line. An answer that arrives
+        // already complete sends no partial, so the line is announced here. The
+        // announcement waits: the line lands before the reply's final text.
+        if (destination.messageThreadId !== undefined) {
+          await runtime.ensureReplyAnnouncement(sessionId, messageId, async () => {
+            await runtime.awaitReplyCut(sessionId);
+            await sendAssistantContextLine(runtime, destination, sessionId);
+          });
+        }
+
         const prepared = await prepareAssistantDocuments(
           remainingText,
           getCurrentSession()?.id === sessionId ? getCurrentSession()?.directory : undefined,
@@ -490,6 +520,7 @@ export function registerAssistantResponseHandlers(deps: AssistantResponseDeps): 
           messageId,
           prepared.documents,
         );
+
         await finalizeAssistantResponse({
           sessionId,
           messageId,

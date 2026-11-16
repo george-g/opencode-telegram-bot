@@ -18,6 +18,7 @@ import { getCurrentProject, getCurrentSession } from "../../app/stores/settings-
 import {
   getTopicBindingBySession,
   registerTopicBinding,
+  removeTopicBinding,
 } from "../../app/stores/topic-binding-store.js";
 import { switchToProject } from "../../app/services/project-switch-service.js";
 import { normalizePathKey } from "../../app/services/worktree-service.js";
@@ -304,6 +305,13 @@ export function buildSessionTopicName(title: string, directory: string): string 
 interface SessionTopic {
   chatId: number;
   threadId: number;
+  /** True when this call created the topic. A reused binding sets it to false. */
+  created: boolean;
+}
+
+/** The send options that keep a message in a session's topic. A chat without a topic sends none. */
+function topicSendOptions(threadId: number | null): { message_thread_id?: number } {
+  return threadId !== null ? { message_thread_id: threadId } : {};
 }
 
 /** The user-facing notice for a topic the bot could not create. */
@@ -334,7 +342,7 @@ async function ensureSessionTopic(
 
   const existing = getTopicBindingBySession(session.id);
   if (existing) {
-    return { chatId: existing.chatId, threadId: existing.threadId };
+    return { chatId: existing.chatId, threadId: existing.threadId, created: false };
   }
 
   const topicName = buildSessionTopicName(session.title, session.directory);
@@ -350,7 +358,7 @@ async function ensureSessionTopic(
     logger.info(
       `[Sessions] Created forum topic for session: sessionId=${session.id}, threadId=${created.message_thread_id}`,
     );
-    return { chatId: chat.id, threadId: created.message_thread_id };
+    return { chatId: chat.id, threadId: created.message_thread_id, created: true };
   } catch (error) {
     logger.error("[Sessions] Failed to create a forum topic for the session:", error);
     await reportTopicCreateFailure(ctx, chat.id);
@@ -359,26 +367,27 @@ async function ensureSessionTopic(
 }
 
 /**
- * The first message in a session's topic: which session the topic belongs to and
- * the state the attach restored. Prompts the attach restored belong to the chat
- * the session was followed in, not the topic, so they are only reported here; a
- * TODO(topic-start) revisits moving them into the topic once the spike settles
- * where restored prompts should live.
+ * Reports in a session's topic what the attach restored. Prompts the attach
+ * restored belong to the chat the session was followed in, not the topic, so
+ * they are only reported here; a TODO(topic-start) revisits moving them into
+ * the topic once the spike settles where restored prompts should live. A topic
+ * receives no message when the attach restored nothing.
  */
 async function sendSessionTopicStartMessage(
   api: Context["api"],
   topic: SessionTopic,
-  session: SessionInfo,
   attachResult: AttachSessionResult | null,
 ): Promise<void> {
-  const lines = [t("sessions.selected", { title: formatSessionTitle(session.title) })];
+  const lines: string[] = [];
   if (attachResult?.restoredQuestion) {
     lines.push(t("attach.restored_question"));
   }
   if (attachResult && attachResult.restoredPermissions > 0) {
-    lines.push(
-      t("attach.restored_permissions", { count: attachResult.restoredPermissions }),
-    );
+    lines.push(t("attach.restored_permissions", { count: attachResult.restoredPermissions }));
+  }
+
+  if (lines.length === 0) {
+    return;
   }
 
   try {
@@ -439,10 +448,20 @@ export async function selectSessionById(
 
   await ctx.answerCallbackQuery();
 
+  // The topic first: the loading message is its first message. Only an explicit
+  // selection reaches this path, so no session gets a topic on its own. A
+  // session with no topic (a private chat, or a failed create) keeps the old
+  // chat behaviour.
+  const topic = await ensureSessionTopic(ctx, sessionInfo);
+
   let loadingMessageId: number | null = null;
   if (ctx.chat) {
     try {
-      const loadingMessage = await ctx.api.sendMessage(ctx.chat.id, t("sessions.loading_context"));
+      const loadingMessage = await ctx.api.sendMessage(
+        ctx.chat.id,
+        t("sessions.loading_context"),
+        topic ? { message_thread_id: topic.threadId } : {},
+      );
       loadingMessageId = loadingMessage.message_id;
     } catch (err) {
       logger.error("[Sessions] Failed to send loading message:", err);
@@ -468,7 +487,7 @@ export async function selectSessionById(
         session: sessionInfo,
       });
     } catch (err) {
-      if (loadingMessageId && ctx.chat) {
+      if (loadingMessageId && ctx.chat && !topic) {
         try {
           await ctx.api.deleteMessage(ctx.chat.id, loadingMessageId);
         } catch (deleteError) {
@@ -478,6 +497,16 @@ export async function selectSessionById(
           );
         }
       }
+      // Only a binding this call created is dropped: a reused binding stays, so
+      // its session keeps its topic.
+      if (topic?.created) {
+        await removeTopicBinding(topic.chatId, topic.threadId).catch((removeError) => {
+          logger.error(
+            "[Sessions] Failed to drop the topic binding after a follow error:",
+            removeError,
+          );
+        });
+      }
       logger.error("[Sessions] Error following selected session:", err);
       throw err;
     }
@@ -485,10 +514,6 @@ export async function selectSessionById(
     if (isSessionOnDashboard && modelChanged) {
       await deps.pinnedMessageManager.onModelChange();
     }
-
-    // The session's topic is set up only after it is really followed, and only
-    // for an explicit selection, so no session gets a topic on its own.
-    const topic = await ensureSessionTopic(ctx, sessionInfo);
 
     if (ctx.chat) {
       const chatId = ctx.chat.id;
@@ -502,7 +527,9 @@ export async function selectSessionById(
         deps.keyboardManager.updateContext(contextInfo.tokensUsed, contextInfo.tokensLimit);
       }
 
-      if (loadingMessageId) {
+      // A loading message in the chat is a transient notice: the topic start
+      // message takes its place. In a topic it stays as the first message.
+      if (loadingMessageId && !topic) {
         try {
           await ctx.api.deleteMessage(chatId, loadingMessageId);
         } catch (err) {
@@ -510,19 +537,8 @@ export async function selectSessionById(
         }
       }
 
-      const keyboard = deps.keyboardManager.getKeyboard();
-      try {
-        await ctx.api.sendMessage(
-          chatId,
-          t("sessions.selected", { title: formatSessionTitle(session.title) }),
-          keyboard ? { reply_markup: keyboard } : {},
-        );
-      } catch (err) {
-        logger.error("[Sessions] Failed to send selection message:", err);
-      }
-
       if (topic) {
-        await sendSessionTopicStartMessage(ctx.api, topic, sessionInfo, attachResult);
+        await sendSessionTopicStartMessage(ctx.api, topic, attachResult);
       }
 
       if (deliverPick) {
@@ -533,13 +549,21 @@ export async function selectSessionById(
           session.directory,
           pickMessages,
           pickBusy,
+          topic?.threadId ?? null,
         );
       }
 
       if (options.postSelectAction === "latest_assistant_response") {
         safeBackgroundTask({
           taskName: "sessions.sendLatestAssistantResponse",
-          task: () => sendLatestAssistantResponse(ctx.api, chatId, session.id, session.directory),
+          task: () =>
+            sendLatestAssistantResponse(
+              ctx.api,
+              chatId,
+              session.id,
+              session.directory,
+              topic?.threadId ?? null,
+            ),
         });
       }
     }
@@ -923,6 +947,7 @@ async function sendPickQuote(
   api: Context["api"],
   chatId: number,
   quote: QuotedNotification,
+  threadId: number | null,
 ): Promise<void> {
   await waitForSessionPickSend();
   try {
@@ -932,6 +957,7 @@ async function sendPickQuote(
       text: quote.text,
       rawFallbackText: quote.rawFallbackText,
       format: "markdown_v2",
+      options: topicSendOptions(threadId),
     });
   } catch (err) {
     logger.error("[Sessions] Failed to send the session pick quote:", err);
@@ -945,6 +971,7 @@ async function sendSessionPickTranscript(
   directory: string,
   messages: SessionPickMessage[] | null,
   busy: boolean,
+  threadId: number | null,
 ): Promise<void> {
   const reply = messages ? findEligibleReply(messages, busy) : null;
   let quoteSource: SessionPickMessage | null = null;
@@ -960,11 +987,11 @@ async function sendSessionPickTranscript(
 
   const quote = quoteSource ? buildSessionPickQuote(quoteSource) : null;
   if (quote) {
-    await sendPickQuote(api, chatId, quote);
+    await sendPickQuote(api, chatId, quote, threadId);
   } else if (!reply) {
     await waitForSessionPickSend();
     try {
-      await api.sendMessage(chatId, t("sessions.preview.empty"));
+      await api.sendMessage(chatId, t("sessions.preview.empty"), topicSendOptions(threadId));
     } catch (err) {
       logger.error("[Sessions] Failed to send the empty session notice:", err);
     }
@@ -986,7 +1013,12 @@ async function sendSessionPickTranscript(
   );
   for (const part of parts) {
     await waitForSessionPickSend();
-    await sendRenderedBotPart({ api, chatId, part, options: AGENT_TEXT_LINK_PREVIEW_OPTIONS });
+    await sendRenderedBotPart({
+      api,
+      chatId,
+      part,
+      options: { ...AGENT_TEXT_LINK_PREVIEW_OPTIONS, ...topicSendOptions(threadId) },
+    });
   }
   if (reply.completed !== undefined)
     await deliverAssistantDocuments(prepared, api, chatId, { disable_notification: true });
@@ -1002,7 +1034,7 @@ async function sendSessionPickTranscript(
   const pendingPrompt = messages ? findPendingUserPrompt(messages, reply.created) : null;
   const pendingQuote = pendingPrompt ? buildSessionPickQuote(pendingPrompt) : null;
   if (pendingQuote) {
-    await sendPickQuote(api, chatId, pendingQuote);
+    await sendPickQuote(api, chatId, pendingQuote, threadId);
   }
 }
 
@@ -1071,6 +1103,7 @@ async function sendLatestAssistantResponse(
   chatId: number,
   sessionId: string,
   directory: string,
+  threadId: number | null,
 ): Promise<void> {
   const response = await loadLatestAssistantResponse(sessionId, directory);
   if (!response) {
@@ -1092,7 +1125,7 @@ async function sendLatestAssistantResponse(
       api,
       chatId,
       part,
-      options: AGENT_TEXT_LINK_PREVIEW_OPTIONS,
+      options: { ...AGENT_TEXT_LINK_PREVIEW_OPTIONS, ...topicSendOptions(threadId) },
     });
   }
   if (response.shownAt !== null)

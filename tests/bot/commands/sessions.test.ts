@@ -541,9 +541,13 @@ describe("bot/commands/sessions", () => {
         session: { id: "session-1", title: "", directory: "/repo" },
       }),
     );
-    expect((ctx.api.sendMessage as ReturnType<typeof vi.fn>).mock.calls[1]?.[1]).toBe(
-      t("sessions.selected", { title: t("pinned.default_session_title") }),
-    );
+    const sendCalls = (ctx.api.sendMessage as ReturnType<typeof vi.fn>).mock.calls;
+    // The selection notice is gone: no call carries its removed i18n key.
+    for (const call of sendCalls) {
+      expect(call[1]).not.toBe("sessions.selected");
+    }
+    expect(sendCalls[0]?.[1]).toBe(t("sessions.loading_context"));
+    expect(sendCalls[1]?.[1]).toBe(t("sessions.preview.empty"));
   });
 
   it("blocks sessions command while foreground session is busy", async () => {
@@ -665,7 +669,7 @@ describe("bot/commands/sessions", () => {
     expect(ctx.reply).not.toHaveBeenCalled();
   });
 
-  it("resolves the project agent before sending the keyboard for an existing session", async () => {
+  it("resolves the project agent before the pick preview for an existing session", async () => {
     mocked.sessionGetMock.mockResolvedValueOnce({
       data: createSession(0),
       error: null,
@@ -699,18 +703,14 @@ describe("bot/commands/sessions", () => {
         ensureEventSubscription: mocked.ensureEventSubscriptionMock,
       }),
     );
-    expect((ctx.api.sendMessage as ReturnType<typeof vi.fn>).mock.calls[1]).toEqual([
-      111,
-      t("sessions.selected", { title: "Session 1" }),
-      expect.objectContaining({
-        reply_markup: { inline_keyboard: [] },
-      }),
-    ]);
+    const sendCalls = (ctx.api.sendMessage as ReturnType<typeof vi.fn>).mock.calls;
+    // The selection message no longer carries a keyboard: only the loading
+    // notice and the pick preview leave the handler.
+    expect(mocked.keyboardGetKeyboardMock).not.toHaveBeenCalled();
+    expect(sendCalls[0]?.[1]).toBe(t("sessions.loading_context"));
+    expect(sendCalls[1]?.[1]).toBe(t("sessions.preview.empty"));
     expect(safeBackgroundTaskMock).toHaveBeenCalledWith(
       expect.objectContaining({ taskName: "sessions.releasePickOutbound" }),
-    );
-    expect((ctx.api.sendMessage as ReturnType<typeof vi.fn>).mock.calls[2]?.[1]).toBe(
-      t("sessions.preview.empty"),
     );
   });
 
@@ -1105,7 +1105,7 @@ describe("bot/commands/sessions", () => {
     );
   });
 
-  it("puts the pulled model on the keyboard sent with the selection message", async () => {
+  it("pushes the pulled model into the keyboard before the context line", async () => {
     mocked.sessionGetMock.mockResolvedValueOnce({ data: createSession(0), error: null });
 
     startInteractionForTest(container.interactionManager, {
@@ -1124,9 +1124,9 @@ describe("bot/commands/sessions", () => {
       modelID: "deepseek-v4-flash",
       variant: "default",
     });
-    expect(defined(mocked.keyboardUpdateModelMock.mock.invocationCallOrder[0])).toBeLessThan(
-      defined(mocked.keyboardGetKeyboardMock.mock.invocationCallOrder[0]),
-    );
+    // The pull pushes the model straight into the manager. No keyboard snapshot
+    // is read in this flow anymore.
+    expect(mocked.keyboardGetKeyboardMock).not.toHaveBeenCalled();
   });
 
   describe("redrawing the dashboard after the pull", () => {
@@ -1249,13 +1249,13 @@ describe("bot/commands/sessions", () => {
     );
     expect(ctx.editMessageReplyMarkup).toHaveBeenCalledOnce();
     expect(ctx.deleteMessage).not.toHaveBeenCalled();
-    expect((ctx.api.sendMessage as ReturnType<typeof vi.fn>).mock.calls[1]).toEqual([
-      111,
-      t("sessions.selected", { title: "Session 1" }),
-      expect.objectContaining({
-        reply_markup: { inline_keyboard: [] },
-      }),
-    ]);
+    // The background path sends no selection message: no call carries the
+    // removed i18n key.
+    const sendCalls = (ctx.api.sendMessage as ReturnType<typeof vi.fn>).mock.calls;
+    expect(sendCalls[1]).toBeUndefined();
+    for (const call of sendCalls) {
+      expect(call[1]).not.toBe("sessions.selected");
+    }
     expect(safeBackgroundTaskMock).not.toHaveBeenCalled();
   });
 

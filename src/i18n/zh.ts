@@ -210,7 +210,6 @@ export const zh: I18nDictionary = {
   "sessions.button.prev_page": "⬅️ 上一页",
   "sessions.button.next_page": "下一页 ➡️",
   "sessions.loading_context": "⏳ 正在加载上下文和最新消息...",
-  "sessions.selected": "✅ 已选择会话：{title}",
   "sessions.select_error": "🔴 选择会话失败。",
   "sessions.topic_create_failed":
     "⚠️ 无法创建论坛话题 — 请确认该群组是论坛且机器人拥有“管理话题”权限。我们将在本聊天中继续，不使用话题。",

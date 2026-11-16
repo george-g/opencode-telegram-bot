@@ -234,7 +234,6 @@ export const de: I18nDictionary = {
   "sessions.button.prev_page": "⬅️ Zurück",
   "sessions.button.next_page": "Weiter ➡️",
   "sessions.loading_context": "⏳ Lade Kontext und letzte Nachrichten...",
-  "sessions.selected": "✅ Sitzung ausgewählt: {title}",
   "sessions.select_error": "🔴 Sitzung konnte nicht ausgewählt werden.",
   "sessions.topic_create_failed":
     "⚠️ Thema konnte nicht erstellt werden — stelle sicher, dass die Gruppe ein Forum ist und der Bot das Recht „Themen verwalten“ hat. Wir machen in diesem Chat ohne Thema weiter.",

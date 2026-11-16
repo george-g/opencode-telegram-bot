@@ -12,7 +12,10 @@ export function registerDashboardHandlers(deps: DashboardDeps): void {
   // Values reach the dashboard at once; its redraws wait while the chat's output is held.
   pinnedMessageManager.setRenderScheduler((render) => summaryAggregator.runOutbound(render));
 
-  summaryAggregator.setOnTokens(async (_sessionId, tokens, isCompleted) => {
+  summaryAggregator.setOnTokens(async (sessionId, tokens, isCompleted) => {
+    // Kept per session: the pinned dashboard holds one session, topics need their own numbers.
+    runtime.setSessionTokensUsed(sessionId, tokens.input + tokens.cacheRead);
+
     if (!pinnedMessageManager.isInitialized()) {
       return;
     }

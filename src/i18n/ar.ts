@@ -224,7 +224,6 @@ export const ar: I18nDictionary = {
   "sessions.button.prev_page": "⬅️ السابق",
   "sessions.button.next_page": "التالي ➡️",
   "sessions.loading_context": "⏳ جارٍ تحميل السياق وأحدث الرسائل...",
-  "sessions.selected": "✅ تم اختيار الجلسة: {title}",
   "sessions.select_error": "🔴 تعذر اختيار الجلسة.",
   "sessions.topic_create_failed":
     "⚠️ تعذّر إنشاء موضوع المحادثة — تأكد من أن المجموعة منتدى ومن أن للبوت صلاحية إدارة المواضيع. سنواصل في هذه المحادثة دون موضوع.",

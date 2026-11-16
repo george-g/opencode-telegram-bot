@@ -32,6 +32,9 @@ const mocked = vi.hoisted(() => {
         createdAt: new Date().toISOString(),
       });
     }),
+    removeTopicBinding: vi.fn(async (chatId: number, threadId: number) =>
+      bindings.delete(`${chatId}:${threadId}`),
+    ),
     getSession: vi.fn(),
     status: vi.fn(),
     messages: vi.fn(),
@@ -65,6 +68,7 @@ vi.mock("../../../src/app/stores/settings-store.js", () => ({
 vi.mock("../../../src/app/stores/topic-binding-store.js", () => ({
   getTopicBindingBySession: mocked.getTopicBindingBySession,
   registerTopicBinding: mocked.registerTopicBinding,
+  removeTopicBinding: mocked.removeTopicBinding,
 }));
 vi.mock("../../../src/app/services/session-service.js", () => ({
   setCurrentSession: mocked.setCurrentSession,
@@ -168,6 +172,7 @@ describe("bot/callbacks/session-topic-provision", () => {
     mocked.bindings.clear();
     mocked.getTopicBindingBySession.mockClear();
     mocked.registerTopicBinding.mockClear();
+    mocked.removeTopicBinding.mockClear();
     mocked.getSession.mockReset();
     mocked.status.mockReset().mockResolvedValue({ data: {}, error: null });
     mocked.messages.mockReset().mockResolvedValue({ data: [], error: null });
@@ -208,6 +213,16 @@ describe("bot/callbacks/session-topic-provision", () => {
       sessionId: "session-1",
       threadId: 500,
     });
+    // The loading notice opens the topic; no selection notice exists.
+    const sentTexts = (ctx.api.sendMessage as ReturnType<typeof vi.fn>).mock.calls.map((call) =>
+      String(call[1]),
+    );
+    expect(sentTexts).toContain(t("sessions.loading_context"));
+    expect(sentTexts.some((text) => text.includes("sessions.selected"))).toBe(false);
+    const loadingSend = (ctx.api.sendMessage as ReturnType<typeof vi.fn>).mock.calls.find(
+      (call) => String(call[1]) === t("sessions.loading_context"),
+    );
+    expect(loadingSend?.[2]).toMatchObject({ message_thread_id: 500 });
   });
 
   it("reuses the existing topic without creating a duplicate on re-connect", async () => {
@@ -277,7 +292,9 @@ describe("bot/callbacks/session-topic-provision", () => {
       String(call[1]),
     );
     expect(sentTexts).toContain(t("sessions.topic_create_failed"));
-    expect(sentTexts).toContain(t("sessions.selected", { title: "Session 1" }));
+    // The loading notice still goes out; the selection never announces itself.
+    expect(sentTexts).toContain(t("sessions.loading_context"));
+    expect(sentTexts.some((text) => text.includes("sessions.selected"))).toBe(false);
   });
 
   it("leaves the chat untouched when it cannot hold topics", async () => {
@@ -289,5 +306,23 @@ describe("bot/callbacks/session-topic-provision", () => {
     expect(ctx.api.createForumTopic).not.toHaveBeenCalled();
     expect(mocked.registerTopicBinding).not.toHaveBeenCalled();
     expect(mocked.getTopicBindingBySession).not.toHaveBeenCalled();
+  });
+
+  it("drops the topic binding after a failed attach and passes the error on", async () => {
+    mocked.getSession.mockResolvedValue({ data: createSession(1), error: null });
+    const err = new Error("attach failed");
+    mocked.attachToSession.mockRejectedValueOnce(err);
+    const ctx = context();
+
+    await expect(selectSessionById(ctx, deps(), "session-1", selectionOptions)).rejects.toBe(err);
+
+    // The topic exists but the session never followed: the binding must not survive.
+    expect(mocked.registerTopicBinding).toHaveBeenCalledTimes(1);
+    expect(mocked.removeTopicBinding).toHaveBeenCalledTimes(1);
+    expect(mocked.removeTopicBinding).toHaveBeenCalledWith(111, 500);
+    // In a topic the loading notice stays as the first message, so it is not deleted.
+    expect(ctx.api.deleteMessage).not.toHaveBeenCalled();
+    // The topic itself stays in the chat: the topic API has no delete call here.
+    expect((ctx.api as unknown as Record<string, unknown>).deleteForumTopic).toBeUndefined();
   });
 });
