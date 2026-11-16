@@ -68,9 +68,11 @@ export async function handleWorktreeCallback(
 
   const page = parseWorktreePageCallback(callbackQuery.data);
   const index = parseWorktreeIndexCallback(callbackQuery.data);
-  // Every reset in this handler drops the callback's own scope: the validation
-  // checks below answer into this chat and topic only, before any switch runs.
+  // The validation checks below answer into this chat and topic only, so their resets
+  // carry this scope. The switch at the end moves the whole bot, so a failure after it
+  // keeps the global reset.
   const scope = getInteractionScope(ctx);
+  let switched = false;
 
   const isActiveMenu = await ensureActiveInlineMenu(ctx, "worktree", deps);
   if (!isActiveMenu) {
@@ -128,6 +130,9 @@ export async function handleWorktreeCallback(
     await upsertSessionDirectory(selectedWorktree.path, Date.now());
     const projectInfo = await getProjectByWorktree(selectedWorktree.path);
     const selectedProjectInfo = { ...projectInfo, name: selectedWorktree.path };
+    // The switch resets every scope itself. From here on a failure may have moved the
+    // project, so the catch below keeps the global reset it always had.
+    switched = true;
     const replyKeyboard = await switchToProject(ctx, selectedProjectInfo, "worktree_switched", {
       ...deps,
       presentation: createProjectSwitchPresentation(deps),
@@ -141,7 +146,14 @@ export async function handleWorktreeCallback(
     return true;
   } catch (error) {
     logger.error("[Bot] Error handling worktree callback:", error);
-    deps.resetInteractions("worktree_select_error");
+    // Before the switch the failure only touched this callback's own prompt and the
+    // messages it answers into, so only this scope is dropped. After it the project
+    // moved, and every scope's state went with it.
+    if (switched) {
+      deps.resetInteractions("worktree_select_error");
+    } else {
+      deps.resetInteractions("worktree_select_error", scope);
+    }
     await failure(ctx, "worktree.select_error");
     return true;
   }

@@ -851,6 +851,12 @@ export async function handleSessionSelect(ctx: Context, deps: SessionSelectDeps)
     return true;
   }
 
+  const scope = getInteractionScope(ctx);
+  // A landed selection or project switch resets every scope, so the full-reset epoch
+  // tells the catch below whether the bot already moved. Before that the failure only
+  // touched this menu, and the catch drops this scope alone.
+  const resetEpochBefore = deps.interactionManager.getResetEpoch();
+
   try {
     const currentProject = getCurrentProject();
 
@@ -895,7 +901,14 @@ export async function handleSessionSelect(ctx: Context, deps: SessionSelectDeps)
       postSelectAction: "preview",
     });
   } catch (error) {
-    deps.resetInteractions("session_select_error");
+    // A failure before the switch only touched this menu, so only its scope is dropped.
+    // The selection reset the whole bot once it landed, so the catch keeps the full
+    // reset then.
+    if (deps.interactionManager.getResetEpoch() === resetEpochBefore) {
+      deps.resetInteractions("session_select_error", scope);
+    } else {
+      deps.resetInteractions("session_select_error");
+    }
     logger.error("[Sessions] Error selecting session:", error);
     await failure(ctx, "sessions.select_error");
   }

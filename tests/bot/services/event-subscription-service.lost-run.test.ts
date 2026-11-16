@@ -8,6 +8,7 @@ import { resetSingletonState } from "../../helpers/reset-singleton-state.js";
 import { t } from "../../../src/i18n/index.js";
 import { createTestAppContainer } from "../../helpers/app-container.js";
 import type { AppContainer } from "../../../src/app/bootstrap/app-container.js";
+import { registerTopicBinding } from "../../../src/app/stores/topic-binding-store.js";
 import type { BotEventSubscriptionService } from "../../../src/bot/services/event-subscription-service.js";
 
 const mocked = vi.hoisted(() => ({
@@ -335,6 +336,36 @@ describe("bot/services/event-subscription-service lost run", () => {
     const pollEdit = api.editMessageText.mock.calls.find((call) => call[1] === 700);
     expect(JSON.stringify(pollEdit)).toContain(t("question.not_answered"));
     expect(container.questionManager.isActive(SCOPE)).toBe(false);
+  });
+
+  it("closes a poll a topic session holds when the server is lost", async () => {
+    // A session bound to a forum topic holds its poll under that topic's scope. The
+    // lookup has to resolve the scope from the binding, not from the base chat.
+    await registerTopicBinding({
+      chatId: 42,
+      threadId: 77,
+      sessionId: "session-1",
+      directory: "D:/repo",
+      topicName: "Feature work",
+    });
+    const topicScope = "42:77";
+
+    container.questionManager.startQuestions(
+      [{ question: "Red or blue?", header: "Color", options: [{ label: "Red", description: "" }] }],
+      "form-1",
+      "session-1",
+      topicScope,
+    );
+    container.questionManager.addMessageId(701, topicScope);
+    container.questionManager.setActiveMessageId(701, topicScope);
+
+    const ending = service!.endRunLostWithServer("opencode_lost");
+    await settle();
+    await ending;
+
+    expect(container.questionManager.isActive(topicScope)).toBe(false);
+    const pollEdit = api.editMessageText.mock.calls.find((call) => call[1] === 701);
+    expect(JSON.stringify(pollEdit)).toContain(t("question.not_answered"));
   });
 
   it("ends a running subagent card interrupted, timed to when the server went away", async () => {

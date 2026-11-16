@@ -27,7 +27,8 @@ export async function handleRecentSelect(ctx: Context, deps: RecentSelectDeps): 
   if (!await ensureActiveInlineMenu(ctx, "recent", deps)) return true;
 
   const indexText = data.slice(RECENT_CALLBACK_PREFIX.length);
-  const metadata = deps.interactionManager.getSnapshot(getInteractionScope(ctx))?.metadata;
+  const scope = getInteractionScope(ctx);
+  const metadata = deps.interactionManager.getSnapshot(scope)?.metadata;
   const index = /^\d+$/.test(indexText) ? Number(indexText) : -1;
   const ids = metadata?.sessionIds;
   const directories = metadata?.directories;
@@ -37,6 +38,11 @@ export async function handleRecentSelect(ctx: Context, deps: RecentSelectDeps): 
     await ctx.answerCallbackQuery({ text: t("inline.inactive_callback"), show_alert: true });
     return true;
   }
+
+  // The project switch and the selection both run below, and each resets every scope.
+  // Their epoch tells the catch whether the bot moved, so a failure that never got
+  // that far does not drop another topic's prompt.
+  const resetEpochBefore = deps.interactionManager.getResetEpoch();
 
   try {
     const { data: session, error } = await opencodeClient.session.get({ sessionID: sessionId, directory });
@@ -56,7 +62,14 @@ export async function handleRecentSelect(ctx: Context, deps: RecentSelectDeps): 
       postSelectAction: "preview",
     });
   } catch (error) {
-    deps.resetInteractions("recent_select_error");
+    // A failure before the switch and the selection only touched this picker's own
+    // message, so only this scope is dropped. Once either has landed the bot moved, and
+    // every scope's state went with it.
+    if (deps.interactionManager.getResetEpoch() === resetEpochBefore) {
+      deps.resetInteractions("recent_select_error", scope);
+    } else {
+      deps.resetInteractions("recent_select_error");
+    }
     logger.error(`[Recent] Failed to select session ${sessionId} in ${directory}:`, error);
     await failure(ctx, "sessions.select_error");
   }

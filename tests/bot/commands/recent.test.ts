@@ -73,4 +73,28 @@ describe("/recent and picker", () => {
     expect(mocked.switch).not.toHaveBeenCalled();
     expect(mocked.select).not.toHaveBeenCalled();
   });
+
+  it("drops only its own scope when the fetch fails before any switch", async () => {
+    const deps = createTestAppContainer();
+    const otherScope = "1:42";
+    startInteractionForTest(deps.interactionManager, {
+      kind: "inline", expectedInput: "callback",
+      metadata: { menuKind: "recent", messageId: 20, sessionIds: ["s1"], directories: ["/repo"] },
+    }, SCOPE);
+    startInteractionForTest(deps.interactionManager, {
+      kind: "inline", expectedInput: "callback",
+      metadata: { menuKind: "recent", messageId: 21, sessionIds: ["s2"], directories: ["/repo"] },
+    }, otherScope);
+    const otherGenerationBefore = deps.interactionManager.getGeneration(otherScope);
+    mocked.get.mockRejectedValue(new Error("server gone"));
+
+    const ctx = context("recent:0");
+    await handleRecentSelect(ctx, { ...deps, bot: {} } as never);
+
+    // The fetch never reached the switch, so the other topic's prompt survives.
+    expect(deps.interactionManager.isActive(SCOPE)).toBe(false);
+    expect(deps.interactionManager.isActive(otherScope)).toBe(true);
+    expect(deps.interactionManager.getGeneration(otherScope)).toBe(otherGenerationBefore);
+    expect(mocked.switch).not.toHaveBeenCalled();
+  });
 });

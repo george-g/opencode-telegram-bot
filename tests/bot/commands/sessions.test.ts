@@ -667,9 +667,65 @@ describe("bot/commands/sessions", () => {
     const handled = await handleSessionSelect(ctx, createDeps());
 
     expect(handled).toBe(true);
-    expect(mocked.clearInteractionMock).toHaveBeenCalledWith("session_select_error");
+    // The fetch failed before any switch ran, so only this menu's scope is dropped.
+    expect(mocked.clearInteractionMock).toHaveBeenCalledWith("session_select_error", SCOPE);
     expect(ctx.answerCallbackQuery).toHaveBeenCalledWith({ text: t("sessions.select_error") });
     expect(ctx.reply).not.toHaveBeenCalled();
+  });
+
+  it("drops only its own scope when the selection failure precedes the switch", async () => {
+    mocked.sessionGetMock.mockRejectedValueOnce(new Error("server gone"));
+
+    const otherScope = "111:42";
+    startInteractionForTest(container.interactionManager, {
+      kind: "inline",
+      expectedInput: "callback",
+      metadata: { menuKind: "session", messageId: 456 },
+    }, SCOPE);
+    startInteractionForTest(container.interactionManager, {
+      kind: "inline",
+      expectedInput: "callback",
+      metadata: { menuKind: "session", messageId: 999 },
+    }, otherScope);
+    const otherGenerationBefore = container.interactionManager.getGeneration(otherScope);
+    const resetInteractions = vi.fn((reason: string, scope?: string) =>
+      container.interactionManager.reset(reason, scope),
+    );
+
+    const ctx = createCallbackContext("session:session-1", 456);
+    await handleSessionSelect(ctx, { ...createDeps(), resetInteractions });
+
+    expect(resetInteractions).toHaveBeenCalledWith("session_select_error", SCOPE);
+    expect(container.interactionManager.isActive(SCOPE)).toBe(false);
+    // The failure never moved the bot, so the other topic keeps its prompt.
+    expect(container.interactionManager.isActive(otherScope)).toBe(true);
+    expect(container.interactionManager.getGeneration(otherScope)).toBe(otherGenerationBefore);
+  });
+
+  it("drops every scope when the selection failure follows the switch", async () => {
+    mocked.sessionGetMock.mockResolvedValueOnce({ data: createSession(0), error: null });
+    const otherScope = "111:42";
+    startInteractionForTest(container.interactionManager, {
+      kind: "inline",
+      expectedInput: "callback",
+      metadata: { menuKind: "session", messageId: 456 },
+    }, SCOPE);
+    startInteractionForTest(container.interactionManager, {
+      kind: "inline",
+      expectedInput: "callback",
+      metadata: { menuKind: "session", messageId: 999 },
+    }, otherScope);
+    // The selection landed, and its own reset moved every scope, before the attach failed.
+    mocked.attachToSessionMock.mockRejectedValueOnce(new Error("attach failed"));
+    const resetInteractions = vi.fn((reason: string, scope?: string) =>
+      container.interactionManager.reset(reason, scope),
+    );
+
+    const ctx = createCallbackContext("session:session-1", 456);
+    await handleSessionSelect(ctx, { ...createDeps(), resetInteractions });
+
+    expect(resetInteractions).toHaveBeenCalledWith("session_select_error");
+    expect(container.interactionManager.isActive(otherScope)).toBe(false);
   });
 
   it("resolves the project agent before the pick preview for an existing session", async () => {

@@ -278,6 +278,12 @@ describe("bot/commands/worktree", () => {
       otherScope,
     );
     const generationBefore = container.interactionManager.getGeneration(otherScope);
+    const ownScope = "123:no-thread";
+    container.interactionManager.start(
+      { kind: "inline", expectedInput: "callback" },
+      ownScope,
+    );
+    const ownGenerationBefore = container.interactionManager.getGeneration(ownScope);
 
     const ctx = createCallbackContext("worktree:1");
     const handled = await handleWorktreeCallback(ctx, {
@@ -292,5 +298,82 @@ describe("bot/commands/worktree", () => {
     });
     expect(container.interactionManager.isActive(otherScope)).toBe(true);
     expect(container.interactionManager.getGeneration(otherScope)).toBe(generationBefore);
+    // The other half of the guard: without the reset, the survived slot above still
+    // passes. The validation has to drop the callback's own scope.
+    expect(container.interactionManager.isActive(ownScope)).toBe(false);
+    expect(container.interactionManager.getGeneration(ownScope)).toBe(ownGenerationBefore + 1);
+  });
+
+  it("drops only the callback's own scope when the failure precedes the switch", async () => {
+    mocked.getGitWorktreeContextMock.mockResolvedValue({
+      mainProjectPath: "/repo",
+      activeWorktreePath: "/repo",
+      branch: "main",
+      isLinkedWorktree: false,
+      worktrees: [
+        { path: "/repo", branch: "main", isCurrent: true, isMain: true },
+        { path: "/repo-feature", branch: "feature/chat", isCurrent: false, isMain: false },
+      ],
+    });
+    // The failure lands before the project switch, so no global state changed.
+    mocked.upsertSessionDirectoryMock.mockRejectedValueOnce(new Error("cache write failed"));
+
+    const container = createTestAppContainer();
+    const otherScope = "123:42";
+    container.interactionManager.start(
+      { kind: "inline", expectedInput: "callback" },
+      otherScope,
+    );
+    const otherGenerationBefore = container.interactionManager.getGeneration(otherScope);
+
+    const ctx = createCallbackContext("worktree:1");
+    const handled = await handleWorktreeCallback(ctx, {
+      ...container,
+      ensureEventSubscription: vi.fn().mockResolvedValue(undefined),
+    });
+
+    expect(handled).toBe(true);
+    expect(mocked.switchToProjectMock).not.toHaveBeenCalled();
+    expect(ctx.answerCallbackQuery).toHaveBeenCalledWith({
+      text: t("worktree.select_error"),
+    });
+    expect(container.interactionManager.isActive("123:no-thread")).toBe(false);
+    expect(container.interactionManager.isActive(otherScope)).toBe(true);
+    expect(container.interactionManager.getGeneration(otherScope)).toBe(otherGenerationBefore);
+  });
+
+  it("drops every scope when the failure follows the switch", async () => {
+    mocked.getGitWorktreeContextMock.mockResolvedValue({
+      mainProjectPath: "/repo",
+      activeWorktreePath: "/repo",
+      branch: "main",
+      isLinkedWorktree: false,
+      worktrees: [
+        { path: "/repo", branch: "main", isCurrent: true, isMain: true },
+        { path: "/repo-feature", branch: "feature/chat", isCurrent: false, isMain: false },
+      ],
+    });
+
+    const container = createTestAppContainer();
+    const otherScope = "123:42";
+    container.interactionManager.start(
+      { kind: "inline", expectedInput: "callback" },
+      otherScope,
+    );
+
+    const ctx = createCallbackContext("worktree:1");
+    // The switch moved the bot, so the failure after it resets everything.
+    (ctx.answerCallbackQuery as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error("answer failed"),
+    );
+    const handled = await handleWorktreeCallback(ctx, {
+      ...container,
+      ensureEventSubscription: vi.fn().mockResolvedValue(undefined),
+    });
+
+    expect(handled).toBe(true);
+    expect(mocked.switchToProjectMock).toHaveBeenCalled();
+    expect(container.interactionManager.isActive("123:no-thread")).toBe(false);
+    expect(container.interactionManager.isActive(otherScope)).toBe(false);
   });
 });

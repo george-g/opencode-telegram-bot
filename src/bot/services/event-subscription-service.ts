@@ -203,7 +203,12 @@ class EventSubscriptionService implements BotEventSubscriptionService {
     }
 
     const { deps, runtime } = this;
-    const destination = this.getChatDestination();
+    const sessionId = getCurrentSession()?.id;
+    // The poll on screen belongs to the followed session. A session bound to a forum
+    // topic holds it under that topic's scope, so the lookup resolves the scope from
+    // the session's destination; an unbound session and a session-less run keep the
+    // plain chat the bot was started with.
+    const destination = sessionId ? this.getDestination(sessionId) : this.getChatDestination();
     // First: failing the poll's question call below would delete the poll, as after /abort.
     const destinationScope = destination
       ? interactionScopeFromDestination(destination)
