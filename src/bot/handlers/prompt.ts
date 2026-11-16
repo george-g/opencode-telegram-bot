@@ -391,8 +391,10 @@ export async function processUserPrompt(
       assistantRunState.clearRun(currentSession.id, "session_prompt_handler_error");
     }
     logger.error("Error in prompt handler:", err);
-    if (interactionManager.getSnapshot(getInteractionScope(ctx))) {
-      deps.resetInteractions("message_handler_error");
+    const errorScope = getInteractionScope(ctx);
+    if (interactionManager.getSnapshot(errorScope)) {
+      // The guard read this scope's slot, so only this scope's slot is dropped.
+      deps.resetInteractions("message_handler_error", errorScope);
     }
     await ctx.reply(t("error.generic"));
     return false;

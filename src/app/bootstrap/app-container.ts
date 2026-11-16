@@ -64,8 +64,11 @@ export interface AppContainer {
   /** Replaces any registered ready-restore handler. */
   setReadyRestoreHandler(handler: OpencodeReadyHandler): void;
 
-  /** Drops the open interaction and anything waiting behind it. */
-  resetInteractions(reason: string): void;
+  /**
+   * Drops the open interaction and anything waiting behind it. Without a scope it
+   * drops every scope; with one it drops that scope alone.
+   */
+  resetInteractions(reason: string, scope?: string): void;
   /**
    * Drops only what a failed handler in the given scope may have left behind.
    * `slotScope` names the chat and topic, so no other scope loses its slot.
@@ -159,7 +162,7 @@ export function createAppContainer(): AppContainer {
       unsubscribeReadyRestore = opencodeReadyLifecycle.onReady(handler);
     },
 
-    resetInteractions: (reason) => interactionManager.reset(reason),
+    resetInteractions: (reason, scope) => interactionManager.reset(reason, scope),
     resetInteractionError: (scope, reason, slotScope) =>
       interactionManager.clearErrorScope(scope, reason, slotScope),
     resetAggregator: () => summaryAggregator.clear(),

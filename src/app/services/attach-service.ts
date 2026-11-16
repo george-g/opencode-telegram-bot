@@ -184,13 +184,14 @@ async function belongsToFollowedSession(
 }
 
 /**
- * Shows the first pending poll of the followed session or its subagents and queues the
- * rest, in OpenCode's order. True when a poll was shown or queued.
- */
-/**
  * The interaction scope of a session the attach restores: its bound forum topic, or
  * the chat's no-thread scope. The attach runs off an update or an event, so it
  * resolves the scope from the session and the chat instead of a context.
+ *
+ * The binding names the chat that hosts the topic, and the passed chat is that same
+ * chat: a topic belongs to one chat only, and the attach runs for that chat. The
+ * mismatch is harmless, and the binding's thread id is what puts the restored prompt
+ * into the topic's own slot.
  */
 function restoreScope(sessionId: string, chatId: number): string {
   const binding = getTopicBindingBySession(sessionId);

@@ -2,9 +2,7 @@ import { getDeleteCompactProgressOnFinish } from "../../../app/stores/settings-s
 import { logger } from "../../../utils/logger.js";
 import type { PermissionRequest } from "../../../app/types/permission.js";
 import type { Question } from "../../../app/types/question.js";
-import {
-  interactionScopeFromDestination,
-} from "../../../app/types/interaction-scope.js";
+import { interactionScopeFromDestination } from "../../../app/types/interaction-scope.js";
 import {
   closeDroppedPoll,
   closeQuestionCancelled,

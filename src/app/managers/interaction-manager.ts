@@ -113,6 +113,17 @@ export class InteractionManager {
   // Full resets. Every scope's epoch follows this counter.
   private globalEpoch = 0;
   // Resets and clears of one scope.
+  //
+  // This map grows by one entry per chat and topic that ever bumps its epoch, and no
+  // path deletes an entry. A prune is unsafe, and the sum below is why: an await
+  // captures `globalEpoch + local`. When the local entry is gone, the same scope reads
+  // `globalEpoch` again. A full reset raises the global counter by one, so an await
+  // captured with `local === 1` reads exactly the value the pruned scope now has: the
+  // stale await looks fresh and its prompt is shown after the reset that dropped it.
+  // Only a scope with no live await may be pruned, and a released request still being
+  // presented holds no slot, no queue entry and no scope key, so that set is not
+  // decidable from this manager's state. The map stays, bounded by the number of chats
+  // and topics the process has seen.
   private scopeEpochs = new Map<string, number>();
   private onWaitingRequestReady: WaitingAgentRequestListener | null = null;
   private onPermissionPromptsDropped: DroppedPermissionPromptsListener | null = null;

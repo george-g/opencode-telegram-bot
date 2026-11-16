@@ -30,6 +30,7 @@ import {
   WORKTREE_CALLBACK_PREFIX,
 } from "../menus/worktree-selection-menu.js";
 import { replyBusyBlocked } from "../messages/busy-blocked-renderer.js";
+import { getInteractionScope } from "../middleware/interaction-scope.js";
 import {
   createProjectSwitchPresentation,
   type ProjectSwitchPresentationDeps,
@@ -67,6 +68,9 @@ export async function handleWorktreeCallback(
 
   const page = parseWorktreePageCallback(callbackQuery.data);
   const index = parseWorktreeIndexCallback(callbackQuery.data);
+  // Every reset in this handler drops the callback's own scope: the validation
+  // checks below answer into this chat and topic only, before any switch runs.
+  const scope = getInteractionScope(ctx);
 
   const isActiveMenu = await ensureActiveInlineMenu(ctx, "worktree", deps);
   if (!isActiveMenu) {
@@ -77,13 +81,13 @@ export async function handleWorktreeCallback(
     const { currentProject, context } = await loadCurrentWorktreeContext();
 
     if (!currentProject) {
-      deps.resetInteractions("worktree_project_missing");
+      deps.resetInteractions("worktree_project_missing", scope);
       await alert(ctx, "worktree.project_not_selected");
       return true;
     }
 
     if (!context) {
-      deps.resetInteractions("worktree_git_context_missing");
+      deps.resetInteractions("worktree_git_context_missing", scope);
       await ctx.answerCallbackQuery({ text: t("worktree.not_git_repo_callback") });
       return true;
     }

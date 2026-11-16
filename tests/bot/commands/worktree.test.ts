@@ -266,4 +266,31 @@ describe("bot/commands/worktree", () => {
     });
     expect(mocked.switchToProjectMock).not.toHaveBeenCalled();
   });
+
+  it("keeps an active interaction of another scope through a worktree validation failure", async () => {
+    // The validation answers into the callback's own chat and topic. It must not
+    // drop the slot of another scope, so its reset has to carry the scope.
+    mocked.currentProject = null;
+    const container = createTestAppContainer();
+    const otherScope = "123:42";
+    container.interactionManager.start(
+      { kind: "inline", expectedInput: "callback" },
+      otherScope,
+    );
+    const generationBefore = container.interactionManager.getGeneration(otherScope);
+
+    const ctx = createCallbackContext("worktree:1");
+    const handled = await handleWorktreeCallback(ctx, {
+      ...container,
+      ensureEventSubscription: vi.fn().mockResolvedValue(undefined),
+    });
+
+    expect(handled).toBe(true);
+    expect(ctx.answerCallbackQuery).toHaveBeenCalledWith({
+      text: t("worktree.project_not_selected"),
+      show_alert: true,
+    });
+    expect(container.interactionManager.isActive(otherScope)).toBe(true);
+    expect(container.interactionManager.getGeneration(otherScope)).toBe(generationBefore);
+  });
 });
