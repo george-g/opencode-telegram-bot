@@ -28,6 +28,8 @@ import { getProjectFolderName } from "../menus/project-selection-menu.js";
 import { isForegroundBusy } from "../../app/services/run-control-service.js";
 import { replyBusyBlocked } from "../messages/busy-blocked-renderer.js";
 import { logger } from "../../utils/logger.js";
+import { isTopicNotFoundError } from "../../utils/telegram-topic-error.js";
+import { dropDeadTopicBinding } from "../events/topic-binding-recovery.js";
 import { safeBackgroundTask } from "../../utils/safe-background-task.js";
 import { config } from "../../config.js";
 import { t } from "../../i18n/index.js";
@@ -345,11 +347,24 @@ async function ensureSessionTopic(
     return { chatId: existing.chatId, threadId: existing.threadId, created: false };
   }
 
+  return createSessionTopic(ctx, session, chat.id);
+}
+
+/**
+ * Creates the session's topic in the chat and stores its binding. Telegram has
+ * no read-only way to look a topic up - there is no `getForumTopic` method - so
+ * a binding is only ever written for a topic this call created.
+ */
+async function createSessionTopic(
+  ctx: Context,
+  session: SessionInfo,
+  chatId: number,
+): Promise<SessionTopic | null> {
   const topicName = buildSessionTopicName(session.title, session.directory);
   try {
-    const created = await ctx.api.createForumTopic(chat.id, topicName);
+    const created = await ctx.api.createForumTopic(chatId, topicName);
     await registerTopicBinding({
-      chatId: chat.id,
+      chatId,
       threadId: created.message_thread_id,
       sessionId: session.id,
       directory: session.directory,
@@ -358,12 +373,101 @@ async function ensureSessionTopic(
     logger.info(
       `[Sessions] Created forum topic for session: sessionId=${session.id}, threadId=${created.message_thread_id}`,
     );
-    return { chatId: chat.id, threadId: created.message_thread_id, created: true };
+    return { chatId, threadId: created.message_thread_id, created: true };
   } catch (error) {
     logger.error("[Sessions] Failed to create a forum topic for the session:", error);
-    await reportTopicCreateFailure(ctx, chat.id);
+    await reportTopicCreateFailure(ctx, chatId);
     return null;
   }
+}
+
+/** The topic to continue the ceremony in, and the id of its loading notice when one went out. */
+interface CeremonyTopicOpening {
+  topic: SessionTopic | null;
+  loadingMessageId: number | null;
+}
+
+/**
+ * Sends the ceremony's loading notice, which doubles as the topic probe. A
+ * deleted topic leaves its binding behind, and every send into it fails with
+ * `400 message thread not found`; there is no read-only check for a topic, so
+ * the send itself is the check. The stale binding then goes and one fresh topic
+ * takes its place, and the ceremony continues in it. Only a reused binding is
+ * recreated: a topic this call created itself is never replaced a second time,
+ * so one ceremony creates at most one replacement topic. The retry into the
+ * fresh topic cannot create a second topic either: its own try/catch keeps the
+ * topic and only drops the loading id. A send that fails for any other reason is
+ * only logged, as before.
+ */
+async function sendCeremonyLoadingNotice(
+  ctx: Context,
+  session: SessionInfo,
+  topic: SessionTopic | null,
+): Promise<CeremonyTopicOpening> {
+  const chat = ctx.chat;
+  if (!chat) {
+    return { topic, loadingMessageId: null };
+  }
+
+  try {
+    return { topic, loadingMessageId: await sendLoadingNotice(ctx, topic) };
+  } catch (error) {
+    if (!topic || topic.created || !isTopicNotFoundError(error)) {
+      logger.error("[Sessions] Failed to send loading message:", error);
+      return { topic, loadingMessageId: null };
+    }
+
+    // The notice went to the chat of the interaction, with the binding's thread
+    // id. A binding of another chat fails here for the foreign thread id alone:
+    // that chat is not the topic's. The live topic over there keeps its binding
+    // and no replacement is made, and the ceremony carries on in this chat
+    // without a topic, so no later send reaches a foreign thread either.
+    if (chat.id !== topic.chatId) {
+      logger.warn(
+        `[Sessions] Session topic belongs to another chat, leaving it alone and continuing here: sessionId=${session.id}, topicChatId=${topic.chatId}, threadId=${topic.threadId}, chatId=${chat.id}`,
+      );
+      return { topic: null, loadingMessageId: null };
+    }
+
+    logger.warn(
+      `[Sessions] Stored session topic no longer exists, recreating it: sessionId=${session.id}, chatId=${topic.chatId}, threadId=${topic.threadId}`,
+    );
+    // The removal goes through the shared helper, which logs a failed one itself.
+    await dropDeadTopicBinding(topic.chatId, topic.threadId, error);
+    // A stale binding that survived must not be shadowed by a fresh topic: the
+    // ceremony then carries on with no topic at all.
+    if (getTopicBindingBySession(session.id)) {
+      logger.error(
+        `[Sessions] Stale topic binding survived, skipping the recreation: sessionId=${session.id}, chatId=${topic.chatId}, threadId=${topic.threadId}`,
+      );
+      return { topic: null, loadingMessageId: null };
+    }
+
+    const recreated = await createSessionTopic(ctx, session, chat.id);
+    if (!recreated) {
+      return { topic: null, loadingMessageId: null };
+    }
+
+    try {
+      return { topic: recreated, loadingMessageId: await sendLoadingNotice(ctx, recreated) };
+    } catch (retryError) {
+      logger.error(
+        "[Sessions] Failed to send loading message into the recreated topic:",
+        retryError,
+      );
+      return { topic: recreated, loadingMessageId: null };
+    }
+  }
+}
+
+/** The loading notice, in the session's topic when the session has one. */
+async function sendLoadingNotice(ctx: Context, topic: SessionTopic | null): Promise<number> {
+  const sent = await ctx.api.sendMessage(
+    ctx.chat!.id,
+    t("sessions.loading_context"),
+    topic ? { message_thread_id: topic.threadId } : {},
+  );
+  return sent.message_id;
 }
 
 /**
@@ -451,22 +555,12 @@ export async function selectSessionById(
   // The topic first: the loading message is its first message. Only an explicit
   // selection reaches this path, so no session gets a topic on its own. A
   // session with no topic (a private chat, or a failed create) keeps the old
-  // chat behaviour.
-  const topic = await ensureSessionTopic(ctx, sessionInfo);
-
-  let loadingMessageId: number | null = null;
-  if (ctx.chat) {
-    try {
-      const loadingMessage = await ctx.api.sendMessage(
-        ctx.chat.id,
-        t("sessions.loading_context"),
-        topic ? { message_thread_id: topic.threadId } : {},
-      );
-      loadingMessageId = loadingMessage.message_id;
-    } catch (err) {
-      logger.error("[Sessions] Failed to send loading message:", err);
-    }
-  }
+  // chat behaviour. The loading notice also probes a reused topic: a deleted one
+  // is dropped and replaced once, then the ceremony carries on in the new topic.
+  const ensuredTopic = await ensureSessionTopic(ctx, sessionInfo);
+  const opening = await sendCeremonyLoadingNotice(ctx, sessionInfo, ensuredTopic);
+  const topic = opening.topic;
+  const loadingMessageId = opening.loadingMessageId;
 
   const deliverPick = options.postSelectAction === "preview" && Boolean(ctx.chat);
   let pickMessages: SessionPickMessage[] | null = null;

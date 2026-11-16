@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ResponseStreamer } from "../../../src/bot/streaming/response-streamer.js";
 import { getTelegramRenderedPartSignature } from "../../../src/bot/render/part-signature.js";
 import type { TelegramRenderedPart } from "../../../src/bot/render/types.js";
+import { logger } from "../../../src/utils/logger.js";
 import { defined } from "../../helpers/defined.js";
 
 function plainPart(text: string): TelegramRenderedPart {
@@ -664,6 +665,109 @@ describe("bot/streaming/response-streamer", () => {
       await vi.advanceTimersByTimeAsync(10);
 
       expect(editPart).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe("deleted topic", () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    /** The `400` grammY raises for a forum topic that no longer exists. */
+    function deletedTopicError(): Error {
+      return Object.assign(
+        new Error("Call to 'editMessageText' failed! (400: message thread not found)"),
+        { error_code: 400, description: "Bad Request: message thread not found" },
+      );
+    }
+
+    /** The break lines the streamer logged: one per broken stream. */
+    function brokenLines(errorSpy: { mock: { calls: unknown[][] } }): string[] {
+      return errorSpy.mock.calls
+        .map((call) => String(call[0]))
+        .filter((line) => line.includes("Stream marked as broken"));
+    }
+
+    it("breaks on a deleted topic instead of degrading to plain text", async () => {
+      vi.useFakeTimers();
+      const errorSpy = vi.spyOn(logger, "error").mockImplementation(() => {});
+
+      const sendPart = vi.fn(async (part) => ({
+        messageId: 800,
+        deliveredSignature: signature(part),
+      }));
+      const editPart = vi.fn().mockRejectedValue(deletedTopicError());
+      const deleteText = vi.fn().mockResolvedValue(undefined);
+      const streamer = new ResponseStreamer({
+        throttleMs: 0,
+        sendPart,
+        editPart,
+        deleteText,
+      });
+
+      streamer.enqueue("s1", "m1", { parts: [richPart("hello")] });
+      await vi.waitFor(() => {
+        expect(sendPart).toHaveBeenCalledTimes(1);
+      });
+
+      streamer.enqueue("s1", "m1", { parts: [richPart("hello there")] });
+      await vi.waitFor(() => {
+        expect(brokenLines(errorSpy)).toHaveLength(1);
+      });
+
+      // The native part failed once. A plain retry would reach the same dead
+      // thread, so the plain-only fallback never happens and the thread sees one
+      // edit only.
+      expect(editPart).toHaveBeenCalledTimes(1);
+      expect(editPart).toHaveBeenCalledWith(800, richPart("hello there"), undefined, "s1");
+      expect(sendPart).toHaveBeenCalledTimes(1);
+      expect(brokenLines(errorSpy)[0]).toContain("reason=topic_deleted");
+
+      const result = await streamer.complete("s1", "m1", { parts: [richPart("hello there")] });
+
+      expect(result.streamed).toBe(false);
+      expect(result.telegramMessageIds).toEqual([]);
+      expect(sendPart).toHaveBeenCalledTimes(1);
+      expect(editPart).toHaveBeenCalledTimes(1);
+      // The visible partial of the dead thread goes; nothing takes its place.
+      expect(deleteText).toHaveBeenCalledTimes(1);
+      expect(deleteText).toHaveBeenCalledWith(800, "s1");
+    });
+
+    it("sends nothing more into the dead thread after the break", async () => {
+      vi.useFakeTimers();
+      const errorSpy = vi.spyOn(logger, "error").mockImplementation(() => {});
+
+      const sendPart = vi.fn().mockRejectedValue(deletedTopicError());
+      const editPart = vi.fn(async (_messageId, part) => ({ deliveredSignature: signature(part) }));
+      const deleteText = vi.fn().mockResolvedValue(undefined);
+      const streamer = new ResponseStreamer({
+        throttleMs: 0,
+        sendPart,
+        editPart,
+        deleteText,
+      });
+
+      streamer.enqueue("s1", "m1", { parts: [richPart("hello")] });
+      await vi.waitFor(() => {
+        expect(brokenLines(errorSpy)).toHaveLength(1);
+      });
+
+      // A payload that arrives after the break stays unsent: the plain retry of
+      // the first send would account for a second call here.
+      streamer.enqueue("s1", "m1", { parts: [plainPart("hello")] });
+      await vi.advanceTimersByTimeAsync(50);
+
+      expect(sendPart).toHaveBeenCalledTimes(1);
+      expect(sendPart).toHaveBeenCalledWith(richPart("hello"), undefined, "s1");
+      expect(editPart).not.toHaveBeenCalled();
+      expect(deleteText).not.toHaveBeenCalled();
+      expect(brokenLines(errorSpy)[0]).toContain("reason=topic_deleted");
+
+      const result = await streamer.complete("s1", "m1", { parts: [richPart("hello")] });
+
+      expect(result.streamed).toBe(false);
+      expect(sendPart).toHaveBeenCalledTimes(1);
     });
   });
 

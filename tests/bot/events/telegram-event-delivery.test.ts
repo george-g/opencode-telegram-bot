@@ -5,6 +5,12 @@ import {
   type TelegramDestination,
 } from "../../../src/bot/events/telegram-event-delivery.js";
 
+const mocked = vi.hoisted(() => ({ dropDeadTopicBinding: vi.fn() }));
+
+vi.mock("../../../src/bot/events/topic-binding-recovery.js", () => ({
+  dropDeadTopicBinding: mocked.dropDeadTopicBinding,
+}));
+
 function createDestination() {
   const api = {
     sendMessage: vi.fn().mockResolvedValue({ message_id: 10 }),
@@ -156,5 +162,54 @@ describe("bot/events/telegram-event-delivery", () => {
 
     expect(api.sendMessage).toHaveBeenNthCalledWith(1, 100, "one", { message_thread_id: 11 });
     expect(api.sendMessage).toHaveBeenNthCalledWith(2, 200, "two", { message_thread_id: 22 });
+  });
+
+  it("drops the binding and passes the error on when the topic is gone", async () => {
+    const { api } = createDestination();
+    const destination = { api, chatId: 100, messageThreadId: 42 } as unknown as TelegramDestination;
+    const deadTopic = Object.assign(
+      new Error("Call to 'sendMessage' failed! (400: message thread not found)"),
+      { error_code: 400, description: "Bad Request: message thread not found" },
+    );
+    api.sendMessage.mockRejectedValueOnce(deadTopic);
+
+    await expect(
+      new TelegramEventDelivery().sendText(destination, "hello"),
+    ).rejects.toBe(deadTopic);
+    expect(mocked.dropDeadTopicBinding).toHaveBeenCalledWith(100, 42, deadTopic);
+    // Delivery never creates a topic; the error is the caller's, unchanged.
+    expect(
+      (api as unknown as Record<string, unknown>).createForumTopic,
+    ).toBeUndefined();
+  });
+
+  it("passes a non-topic failure on unchanged, leaving the decision to the helper", async () => {
+    const { api } = createDestination();
+    const destination = { api, chatId: 100, messageThreadId: 42 } as unknown as TelegramDestination;
+    const otherError = Object.assign(new Error("Bad Request: chat not found"), { error_code: 400 });
+    api.sendMessage.mockRejectedValueOnce(otherError);
+
+    await expect(new TelegramEventDelivery().sendText(destination, "hello")).rejects.toBe(
+      otherError,
+    );
+    // The recovery helper owns the recognition: it ignores everything but the 400.
+    expect(mocked.dropDeadTopicBinding).toHaveBeenCalledWith(100, 42, otherError);
+  });
+
+  it("keeps the delivery error when the recovery itself fails", async () => {
+    const { api } = createDestination();
+    const destination = { api, chatId: 100, messageThreadId: 42 } as unknown as TelegramDestination;
+    const deadTopic = Object.assign(
+      new Error("Call to 'sendMessage' failed! (400: message thread not found)"),
+      { error_code: 400, description: "Bad Request: message thread not found" },
+    );
+    const recoveryError = new Error("settings write failed");
+    api.sendMessage.mockRejectedValueOnce(deadTopic);
+    mocked.dropDeadTopicBinding.mockRejectedValueOnce(recoveryError);
+
+    // The recovery failure is logged, and the original failure still reaches the caller.
+    await expect(new TelegramEventDelivery().sendText(destination, "hello")).rejects.toBe(
+      deadTopic,
+    );
   });
 });

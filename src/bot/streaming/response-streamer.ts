@@ -3,6 +3,7 @@ import { logger } from "../../utils/logger.js";
 import { chunkPlainText } from "../render/chunker.js";
 import { getTelegramRenderedPartSignature } from "../render/part-signature.js";
 import type { TelegramRenderedPart } from "../render/types.js";
+import { isTopicNotFoundError } from "../../utils/telegram-topic-error.js";
 import { resolveStreamThrottleMs, type StreamThrottleMs } from "./stream-throttle.js";
 
 type SendMessageApi = Pick<Api<RawApi>, "sendMessage">;
@@ -506,6 +507,14 @@ export class ResponseStreamer {
         );
         return true;
       } catch (error) {
+        // A deleted topic is not a rendering problem: the plain representation
+        // would be sent into the same dead thread, so the stream breaks at once
+        // and the delivery has already dropped the stale binding.
+        if (isTopicNotFoundError(error)) {
+          this.markStreamBroken(state, error, "topic_deleted");
+          return false;
+        }
+
         const retryAfterMs = getRetryAfterMs(error);
         if (retryAfterMs !== null) {
           const delayMs = Math.max(this.resolveThrottleMs(state.sessionId), retryAfterMs);

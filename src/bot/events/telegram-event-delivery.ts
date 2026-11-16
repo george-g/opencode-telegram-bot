@@ -10,6 +10,7 @@ import {
   sendRenderedBotPart,
 } from "../messages/telegram-text.js";
 import type { TelegramRenderedPart } from "../render/types.js";
+import { dropDeadTopicBinding } from "./topic-binding-recovery.js";
 
 type TelegramApi = Bot<Context>["api"];
 type SendMessageOptions = Parameters<TelegramApi["sendMessage"]>[2];
@@ -141,39 +142,79 @@ function isMessageToDeleteMissingError(error: unknown): boolean {
 /**
  * Telegram primitives for the event bridge. Every call names its destination;
  * only "not modified" edits and already-missing deletes are tolerated, anything
- * else (a 429 included) reaches the caller so the streamers can retry.
+ * else (a 429 included) reaches the caller so the streamers can retry. A send
+ * into a topic Telegram no longer has drops the stale binding first: delivery
+ * never replaces a topic, so after the removal the session falls back to the
+ * plain chat on the next destination read.
  */
 export class TelegramEventDelivery {
   private nextDraftId = 1;
+
+  /**
+   * Runs one Telegram call and turns a `400 message thread not found` into a
+   * stopped delivery: the dead binding goes, and the original error reaches the
+   * caller. The call is only recognized as a dead topic when it names one, and
+   * the removal lives in `dropDeadTopicBinding`, which ignores every other
+   * failure. Delivery never creates a topic, so the caller sees a plain failure
+   * and the session falls back to the chat root on the next destination read.
+   */
+  private async withTopicRecovery<T>(
+    destination: TelegramDestination,
+    call: () => Promise<T>,
+  ): Promise<T> {
+    try {
+      return await call();
+    } catch (error) {
+      const threadId = destination.messageThreadId;
+      if (threadId !== undefined) {
+        try {
+          await dropDeadTopicBinding(destination.chatId, threadId, error);
+        } catch (recoveryError) {
+          // A failed removal is a recovery problem of its own: it must not
+          // replace the failure that reached this point.
+          logger.error(
+            "[Bot] Failed to recover the delivery from a missing forum topic:",
+            recoveryError,
+          );
+        }
+      }
+
+      throw error;
+    }
+  }
 
   async sendText(
     destination: TelegramDestination,
     text: string,
     options?: SendMessageOptions,
   ): Promise<number> {
-    const threadOptions = withMessageThread(options, destination);
-    const sentMessage =
-      threadOptions === undefined
-        ? await destination.api.sendMessage(destination.chatId, text)
-        : await destination.api.sendMessage(destination.chatId, text, threadOptions);
-    return sentMessage.message_id;
+    return this.withTopicRecovery(destination, async () => {
+      const threadOptions = withMessageThread(options, destination);
+      const sentMessage =
+        threadOptions === undefined
+          ? await destination.api.sendMessage(destination.chatId, text)
+          : await destination.api.sendMessage(destination.chatId, text, threadOptions);
+      return sentMessage.message_id;
+    });
   }
 
-  async editText(destination: TelegramDestination, messageId: number, text: string): Promise<void> {
-    const options = withMessageThread<EditMessageTextOptions>(undefined, destination);
-    try {
-      if (options === undefined) {
-        await destination.api.editMessageText(destination.chatId, messageId, text);
-      } else {
-        await destination.api.editMessageText(destination.chatId, messageId, text, options);
-      }
-    } catch (error) {
-      if (isMessageNotModifiedError(error)) {
-        return;
-      }
+  editText(destination: TelegramDestination, messageId: number, text: string): Promise<void> {
+    return this.withTopicRecovery(destination, async () => {
+      const options = withMessageThread<EditMessageTextOptions>(undefined, destination);
+      try {
+        if (options === undefined) {
+          await destination.api.editMessageText(destination.chatId, messageId, text);
+        } else {
+          await destination.api.editMessageText(destination.chatId, messageId, text, options);
+        }
+      } catch (error) {
+        if (isMessageNotModifiedError(error)) {
+          return;
+        }
 
-      throw error;
-    }
+        throw error;
+      }
+    });
   }
 
   async deleteText(destination: TelegramDestination, messageId: number): Promise<void> {
@@ -186,26 +227,30 @@ export class TelegramEventDelivery {
     });
   }
 
-  async sendDocument(
+  sendDocument(
     destination: TelegramDestination,
     fileData: CodeFileData,
     options?: SendDocumentOptions,
   ): Promise<void> {
-    logger.debug(`[Bot] Sending code file: ${fileData.filename} (${fileData.buffer.length} bytes)`);
+    return this.withTopicRecovery(destination, async () => {
+      logger.debug(
+        `[Bot] Sending code file: ${fileData.filename} (${fileData.buffer.length} bytes)`,
+      );
 
-    // Hand the buffer straight to grammY: no temp file on disk, so no writable
-    // install directory to depend on and no name collisions between uploads.
-    await destination.api.sendDocument(
-      destination.chatId,
-      new InputFile(fileData.buffer, fileData.filename),
-      withMessageThread(
-        {
-          caption: fileData.caption,
-          ...options,
-        },
-        destination,
-      ),
-    );
+      // Hand the buffer straight to grammY: no temp file on disk, so no writable
+      // install directory to depend on and no name collisions between uploads.
+      await destination.api.sendDocument(
+        destination.chatId,
+        new InputFile(fileData.buffer, fileData.filename),
+        withMessageThread(
+          {
+            caption: fileData.caption,
+            ...options,
+          },
+          destination,
+        ),
+      );
+    });
   }
 
   sendRenderedPart(
@@ -214,13 +259,15 @@ export class TelegramEventDelivery {
     options?: RenderedSendOptions,
     allowPlainFallback?: boolean,
   ) {
-    return sendRenderedBotPart({
-      api: destination.api,
-      chatId: destination.chatId,
-      part,
-      options: withMessageThread({ ...options, ...AGENT_TEXT_LINK_PREVIEW_OPTIONS }, destination),
-      ...(allowPlainFallback === undefined ? {} : { allowPlainFallback }),
-    });
+    return this.withTopicRecovery(destination, () =>
+      sendRenderedBotPart({
+        api: destination.api,
+        chatId: destination.chatId,
+        part,
+        options: withMessageThread({ ...options, ...AGENT_TEXT_LINK_PREVIEW_OPTIONS }, destination),
+        ...(allowPlainFallback === undefined ? {} : { allowPlainFallback }),
+      }),
+    );
   }
 
   async editRenderedPart(
@@ -229,25 +276,27 @@ export class TelegramEventDelivery {
     part: TelegramRenderedPart,
     options?: RenderedEditOptions,
   ) {
-    try {
-      return await editRenderedBotPart({
-        api: destination.api,
-        chatId: destination.chatId,
-        messageId,
-        part,
-        options: withMessageThread(
-          { ...options, ...AGENT_TEXT_LINK_PREVIEW_OPTIONS },
-          destination,
-        ),
-        allowPlainFallback: false,
-      });
-    } catch (error) {
-      if (isMessageNotModifiedError(error)) {
-        return { deliveredSignature: getTelegramRenderedPartSignature(part) };
-      }
+    return this.withTopicRecovery(destination, async () => {
+      try {
+        return await editRenderedBotPart({
+          api: destination.api,
+          chatId: destination.chatId,
+          messageId,
+          part,
+          options: withMessageThread(
+            { ...options, ...AGENT_TEXT_LINK_PREVIEW_OPTIONS },
+            destination,
+          ),
+          allowPlainFallback: false,
+        });
+      } catch (error) {
+        if (isMessageNotModifiedError(error)) {
+          return { deliveredSignature: getTelegramRenderedPartSignature(part) };
+        }
 
-      throw error;
-    }
+        throw error;
+      }
+    });
   }
 
   /** Starts a new draft; its id is the stream's message id from then on. */
@@ -259,7 +308,9 @@ export class TelegramEventDelivery {
   }
 
   editDraftPart(destination: TelegramDestination, draftId: number, part: TelegramRenderedPart) {
-    return sendDraftPartWithThread(destination, draftId, part);
+    return this.withTopicRecovery(destination, () =>
+      sendDraftPartWithThread(destination, draftId, part),
+    );
   }
 
   completeDraftPart(
@@ -267,15 +318,17 @@ export class TelegramEventDelivery {
     part: TelegramRenderedPart,
     options?: DraftCompleteOptions,
   ) {
-    return completeDraftPart({
-      api: destination.api,
-      chatId: destination.chatId,
-      part,
-      options: withMessageThread(
-        { ...options, ...AGENT_TEXT_LINK_PREVIEW_OPTIONS },
-        destination,
-      ),
-    });
+    return this.withTopicRecovery(destination, () =>
+      completeDraftPart({
+        api: destination.api,
+        chatId: destination.chatId,
+        part,
+        options: withMessageThread(
+          { ...options, ...AGENT_TEXT_LINK_PREVIEW_OPTIONS },
+          destination,
+        ),
+      }),
+    );
   }
 
   resetDraftIds(): void {

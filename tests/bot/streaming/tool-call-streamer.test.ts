@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ToolCallStreamer } from "../../../src/bot/streaming/tool-call-streamer.js";
+import { logger } from "../../../src/utils/logger.js";
 import { defined } from "../../helpers/defined.js";
 
 describe("bot/streaming/tool-call-streamer", () => {
@@ -1134,6 +1135,95 @@ describe("bot/streaming/tool-call-streamer", () => {
       expect(editText.mock.calls.map((call) => String(call[2]))).not.toContain(
         "🧩 card changed again",
       );
+    });
+  });
+
+  describe("deleted topic", () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    /** The `400` grammY raises for a forum topic that no longer exists. */
+    function deletedTopicError(): Error {
+      return Object.assign(
+        new Error("Call to 'sendMessage' failed! (400: message thread not found)"),
+        { error_code: 400, description: "Bad Request: message thread not found" },
+      );
+    }
+
+    /** The break lines the streamer logged: one per broken stream. */
+    function brokenLines(errorSpy: { mock: { calls: unknown[][] } }): string[] {
+      return errorSpy.mock.calls
+        .map((call) => String(call[0]))
+        .filter((line) => line.includes("Stream marked as broken"));
+    }
+
+    it("breaks with topic_deleted when a send into the dead thread fails", async () => {
+      vi.useFakeTimers();
+      const errorSpy = vi.spyOn(logger, "error").mockImplementation(() => {});
+
+      // A retry would reach the same dead thread, so the failure must stand.
+      const sendText = vi.fn().mockRejectedValueOnce(deletedTopicError()).mockResolvedValue(11);
+      const editText = vi.fn().mockResolvedValue(undefined);
+      const deleteText = vi.fn().mockResolvedValue(undefined);
+      const streamer = new ToolCallStreamer({
+        throttleMs: 0,
+        sendText,
+        editText,
+        deleteText,
+      });
+
+      streamer.append("s1", "tool line");
+      await vi.waitFor(() => {
+        expect(brokenLines(errorSpy)).toHaveLength(1);
+      });
+      await vi.advanceTimersByTimeAsync(1000);
+
+      expect(sendText).toHaveBeenCalledTimes(1);
+      expect(sendText).toHaveBeenCalledWith("s1", "tool line");
+      expect(editText).not.toHaveBeenCalled();
+      expect(deleteText).not.toHaveBeenCalled();
+      expect(brokenLines(errorSpy)[0]).toContain("reason=topic_deleted");
+      // The broken stream holds nothing back for a new message of its own.
+      expect(streamer.hasUnsentMessages("s1")).toBe(false);
+    });
+
+    it("keeps a later tool line out of the dead thread after the break", async () => {
+      vi.useFakeTimers();
+      const errorSpy = vi.spyOn(logger, "error").mockImplementation(() => {});
+
+      const sendText = vi.fn().mockResolvedValueOnce(10);
+      const editText = vi
+        .fn()
+        .mockRejectedValueOnce(deletedTopicError())
+        .mockResolvedValue(undefined);
+      const deleteText = vi.fn().mockResolvedValue(undefined);
+      const streamer = new ToolCallStreamer({
+        throttleMs: 0,
+        sendText,
+        editText,
+        deleteText,
+      });
+
+      streamer.append("s1", "first tool line");
+      await vi.waitFor(() => {
+        expect(sendText).toHaveBeenCalledTimes(1);
+      });
+
+      // The line queues while the failing edit is still in flight, so it lands
+      // on the same stream and never reaches the dead thread.
+      streamer.append("s1", "second tool line");
+      await vi.waitFor(() => {
+        expect(brokenLines(errorSpy)).toHaveLength(1);
+      });
+      await vi.advanceTimersByTimeAsync(1000);
+
+      expect(editText).toHaveBeenCalledTimes(1);
+      expect(editText).toHaveBeenCalledWith("s1", 10, "first tool line\n\nsecond tool line");
+      expect(sendText).toHaveBeenCalledTimes(1);
+      expect(deleteText).not.toHaveBeenCalled();
+      expect(brokenLines(errorSpy)[0]).toContain("reason=topic_deleted");
+      expect(streamer.hasUnsentMessages("s1")).toBe(false);
     });
   });
 

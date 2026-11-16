@@ -21,6 +21,7 @@ type FakeBotApi = {
   editMessageText: ReturnType<typeof vi.fn>;
   deleteMessage: ReturnType<typeof vi.fn>;
   sendDocument: ReturnType<typeof vi.fn>;
+  createForumTopic: ReturnType<typeof vi.fn>;
 };
 
 function createFakeBot(): { bot: Bot<Context>; api: FakeBotApi } {
@@ -30,6 +31,7 @@ function createFakeBot(): { bot: Bot<Context>; api: FakeBotApi } {
     editMessageText: vi.fn().mockResolvedValue(undefined),
     deleteMessage: vi.fn().mockResolvedValue(undefined),
     sendDocument: vi.fn().mockResolvedValue({ message_id: 101 }),
+    createForumTopic: vi.fn().mockResolvedValue({ message_thread_id: 999 }),
   };
   return { bot: { api } as unknown as Bot<Context>, api };
 }
@@ -207,5 +209,42 @@ describe("spike-a1/delivery-and-gate", () => {
     // The replaced thread is gone and the new binding is the only candidate.
     expect(listTopicBindings().filter((entry) => entry.binding.sessionId === "A")).toHaveLength(1);
     expect(listTopicBindings()[0]?.threadId).toBe(303);
+  });
+
+  it("A3: a 400 message thread not found on delivery drops the binding and creates nothing", async () => {
+    const { api, policy } = await setupService();
+    const { TelegramEventDelivery } = await import(
+      "../../src/bot/events/telegram-event-delivery.js"
+    );
+
+    await registerTopicBinding({
+      chatId: 500,
+      threadId: 101,
+      sessionId: "A",
+      directory: "D:/repo-a",
+      topicName: "Topic A",
+    });
+
+    const deadTopic = Object.assign(
+      new Error("Call to 'sendMessage' failed! (400: message thread not found)"),
+      { error_code: 400, description: "Bad Request: message thread not found" },
+    );
+    api.sendMessage.mockRejectedValueOnce(deadTopic);
+
+    const destination = policy.getDestination("A");
+    expect(destination?.messageThreadId).toBe(101);
+
+    await expect(
+      new TelegramEventDelivery().sendText(destination as never, "hello"),
+    ).rejects.toBe(deadTopic);
+
+    // The stale binding is gone: delivery never creates a topic, it only stops.
+    expect(getTopicBindingBySession("A")).toBeNull();
+    expect(api.createForumTopic).not.toHaveBeenCalled();
+
+    // After the removal the session falls back to the plain chat on the next read.
+    const fallback = policy.getDestination("A");
+    expect(fallback?.chatId).toBe(42);
+    expect(fallback?.messageThreadId).toBeUndefined();
   });
 });

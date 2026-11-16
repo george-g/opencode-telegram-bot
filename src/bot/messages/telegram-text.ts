@@ -1,6 +1,7 @@
 import type { Api, RawApi } from "grammy";
 import type { MessageEntity } from "grammy/types";
 import { logger } from "../../utils/logger.js";
+import { isTopicNotFoundError } from "../../utils/telegram-topic-error.js";
 import {
   editMessageWithMarkdownFallback,
   isTelegramBadRequestError,
@@ -217,7 +218,9 @@ export async function sendRenderedBotPart({
       deliveredSignature: getTelegramRenderedPartSignature(part),
     };
   } catch (error) {
-    if (!allowPlainFallback || !isTelegramBadRequestError(error)) {
+    // A deleted topic fails the same way in plain text: retrying only sends
+    // again into a topic that is gone. The delivery recognizes the error.
+    if (!allowPlainFallback || !isTelegramBadRequestError(error) || isTopicNotFoundError(error)) {
       throw error;
     }
 
@@ -300,10 +303,13 @@ export async function editRenderedBotPart({
     };
   } catch (error) {
     // An edit targets exactly one message, so there is nothing to split it
-    // across; a plain retry is only possible when the text fits a message.
+    // across; a plain retry is only possible when the text fits a message. A
+    // deleted topic is not a formatting failure: the plain retry would only hit
+    // the same dead thread, so the error goes straight out.
     if (
       !allowPlainFallback ||
       !isTelegramBadRequestError(error) ||
+      isTopicNotFoundError(error) ||
       part.fallbackText.length > TELEGRAM_TEXT_MESSAGE_LIMIT
     ) {
       throw error;

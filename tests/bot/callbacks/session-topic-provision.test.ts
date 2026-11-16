@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Context } from "grammy";
 import { selectSessionById, type SessionSelectDeps } from "../../../src/bot/callbacks/session-callback-handler.js";
+import { __resetDeadTopicLatchesForTests } from "../../../src/bot/events/topic-binding-recovery.js";
 import { t } from "../../../src/i18n/index.js";
 
 interface StoredBinding {
@@ -114,6 +115,7 @@ function createSession(index: number) {
 
 interface ContextOptions {
   chatType?: string;
+  chatId?: number;
   createForumTopic?: (chatId: number, name: string) => Promise<{ message_thread_id: number }>;
 }
 
@@ -127,7 +129,7 @@ function context(options: ContextOptions = {}) {
     ),
   };
   return {
-    chat: { id: 111, type: options.chatType ?? "supergroup" },
+    chat: { id: options.chatId ?? 111, type: options.chatType ?? "supergroup" },
     api,
     answerCallbackQuery: vi.fn().mockResolvedValue(true),
     deleteMessage: vi.fn().mockResolvedValue(true),
@@ -173,6 +175,12 @@ describe("bot/callbacks/session-topic-provision", () => {
     mocked.getTopicBindingBySession.mockClear();
     mocked.registerTopicBinding.mockClear();
     mocked.removeTopicBinding.mockClear();
+    mocked.removeTopicBinding.mockImplementation(async (chatId: number, threadId: number) =>
+      mocked.bindings.delete(`${chatId}:${threadId}`),
+    );
+    // The dead-topic latch is per process: an earlier test must not suppress the
+    // removal this one expects.
+    __resetDeadTopicLatchesForTests();
     mocked.getSession.mockReset();
     mocked.status.mockReset().mockResolvedValue({ data: {}, error: null });
     mocked.messages.mockReset().mockResolvedValue({ data: [], error: null });
@@ -324,5 +332,191 @@ describe("bot/callbacks/session-topic-provision", () => {
     expect(ctx.api.deleteMessage).not.toHaveBeenCalled();
     // The topic itself stays in the chat: the topic API has no delete call here.
     expect((ctx.api as unknown as Record<string, unknown>).deleteForumTopic).toBeUndefined();
+  });
+
+  /** The `400` Telegram answers with for a forum topic that no longer exists. */
+  function topicNotFoundError(): Error {
+    return Object.assign(
+      new Error("Call to 'sendMessage' failed! (400: message thread not found)"),
+      {
+        error_code: 400,
+        description: "Bad Request: message thread not found",
+      },
+    );
+  }
+
+  /** A context whose sends into `deadThreadId` fail the way a deleted topic does. */
+  function contextWithDeadThread(deadThreadId: number, createdThreadId: number) {
+    const ctx = context();
+    ctx.api.createForumTopic.mockImplementation(async () => ({
+      message_thread_id: createdThreadId,
+    }));
+    ctx.api.sendMessage.mockImplementation(
+      async (_chatId: number, _text: string, options?: { message_thread_id?: number }) => {
+        if (options?.message_thread_id === deadThreadId) {
+          throw topicNotFoundError();
+        }
+        return { message_id: 10 };
+      },
+    );
+    return ctx;
+  }
+
+  function loadingSends(ctx: Context): Array<[number, string, { message_thread_id?: number }?]> {
+    return (ctx.api.sendMessage as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (call) => String(call[1]) === t("sessions.loading_context"),
+    ) as Array<[number, string, { message_thread_id?: number }?]>;
+  }
+
+  it("drops a dead stored binding and recreates the topic in the ceremony", async () => {
+    mocked.getSession.mockResolvedValue({ data: createSession(1), error: null });
+    await mocked.registerTopicBinding({
+      chatId: 111,
+      threadId: 19,
+      sessionId: "session-1",
+      directory: "/repo",
+      topicName: "Session 1 · repo",
+    });
+    const ctx = contextWithDeadThread(19, 700);
+
+    await selectSessionById(ctx, deps(), "session-1", selectionOptions);
+
+    // The stale binding goes and one fresh topic takes its place.
+    expect(mocked.removeTopicBinding).toHaveBeenCalledTimes(1);
+    expect(mocked.removeTopicBinding).toHaveBeenCalledWith(111, 19);
+    expect(ctx.api.createForumTopic).toHaveBeenCalledTimes(1);
+    expect(mocked.bindings.get("111:19")).toBeUndefined();
+    expect(mocked.bindings.get("111:700")).toMatchObject({ sessionId: "session-1" });
+
+    // The ceremony carried on in the new topic, with no user-visible error.
+    const sends = loadingSends(ctx);
+    expect(sends).toHaveLength(2);
+    expect(sends[1]?.[2]).toMatchObject({ message_thread_id: 700 });
+    expect(mocked.attachToSession).toHaveBeenCalledTimes(1);
+    const sentTexts = (ctx.api.sendMessage as ReturnType<typeof vi.fn>).mock.calls.map((call) =>
+      String(call[1]),
+    );
+    expect(sentTexts.some((text) => text.includes("message thread not found"))).toBe(false);
+    expect(sentTexts).not.toContain(t("sessions.topic_create_failed"));
+  });
+
+  it("recreates the topic at most once when the fresh topic also fails", async () => {
+    mocked.getSession.mockResolvedValue({ data: createSession(1), error: null });
+    await mocked.registerTopicBinding({
+      chatId: 111,
+      threadId: 19,
+      sessionId: "session-1",
+      directory: "/repo",
+      topicName: "Session 1 · repo",
+    });
+    const ctx = context();
+    ctx.api.createForumTopic.mockImplementation(async () => ({ message_thread_id: 700 }));
+    // Every topic-bound send fails, so the replacement is as dead as the original.
+    ctx.api.sendMessage.mockImplementation(
+      async (_chatId: number, _text: string, options?: { message_thread_id?: number }) => {
+        if (options?.message_thread_id !== undefined) {
+          throw topicNotFoundError();
+        }
+        return { message_id: 10 };
+      },
+    );
+
+    await expect(
+      selectSessionById(ctx, deps(), "session-1", selectionOptions),
+    ).resolves.toBeUndefined();
+
+    // Exactly one replacement: the recreate guard stops the second failure here.
+    expect(ctx.api.createForumTopic).toHaveBeenCalledTimes(1);
+    expect(mocked.removeTopicBinding).toHaveBeenCalledTimes(1);
+    expect(mocked.error).toHaveBeenCalled();
+    // The attach still runs: a topic that stays dead never blocks the session.
+    expect(mocked.attachToSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the stored binding when the loading send fails for another reason", async () => {
+    mocked.getSession.mockResolvedValue({ data: createSession(1), error: null });
+    await mocked.registerTopicBinding({
+      chatId: 111,
+      threadId: 19,
+      sessionId: "session-1",
+      directory: "/repo",
+      topicName: "Session 1 · repo",
+    });
+    const ctx = context();
+    ctx.api.sendMessage.mockRejectedValueOnce(
+      Object.assign(new Error("Bad Request: chat not found"), { error_code: 400 }),
+    );
+
+    await selectSessionById(ctx, deps(), "session-1", selectionOptions);
+
+    // A non-topic failure is only logged: the binding and the topic stay.
+    expect(mocked.removeTopicBinding).not.toHaveBeenCalled();
+    expect(ctx.api.createForumTopic).not.toHaveBeenCalled();
+    expect(mocked.bindings.get("111:19")).toMatchObject({ sessionId: "session-1" });
+  });
+
+  it("keeps a live topic of another chat when the ceremony runs from a second chat", async () => {
+    mocked.getSession.mockResolvedValue({ data: createSession(1), error: null });
+    // The session is bound in chat 111; the ceremony runs from chat 222.
+    await mocked.registerTopicBinding({
+      chatId: 111,
+      threadId: 19,
+      sessionId: "session-1",
+      directory: "/repo",
+      topicName: "Session 1 · repo",
+    });
+    const ctx = context({
+      chatId: 222,
+      createForumTopic: async () => ({ message_thread_id: 700 }),
+    });
+    ctx.api.sendMessage.mockImplementation(
+      async (_chatId: number, _text: string, options?: { message_thread_id?: number }) => {
+        if (options?.message_thread_id !== undefined) {
+          throw topicNotFoundError();
+        }
+        return { message_id: 10 };
+      },
+    );
+
+    await selectSessionById(ctx, deps(), "session-1", selectionOptions);
+
+    // The foreign thread id alone failed the send. The live topic in chat 111
+    // keeps its binding, and no topic is created in chat 222.
+    expect(mocked.removeTopicBinding).not.toHaveBeenCalled();
+    expect(ctx.api.createForumTopic).not.toHaveBeenCalled();
+    expect(mocked.bindings.get("111:19")).toMatchObject({ sessionId: "session-1" });
+    expect(mocked.warn).toHaveBeenCalledWith(
+      expect.stringContaining("Session topic belongs to another chat"),
+    );
+    // The ceremony carries on without a topic, so no later send of it reaches
+    // the foreign thread either.
+    const foreignSends = (ctx.api.sendMessage as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (call) => (call[2] as { message_thread_id?: number } | undefined)?.message_thread_id === 19,
+    );
+    expect(foreignSends).toHaveLength(1);
+    // The attach always reaches the session.
+    expect(mocked.attachToSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips the recreation when the stale binding cannot be dropped", async () => {
+    mocked.getSession.mockResolvedValue({ data: createSession(1), error: null });
+    await mocked.registerTopicBinding({
+      chatId: 111,
+      threadId: 19,
+      sessionId: "session-1",
+      directory: "/repo",
+      topicName: "Session 1 · repo",
+    });
+    const ctx = contextWithDeadThread(19, 700);
+    // The removal itself fails, so the stale binding survives the probe.
+    mocked.removeTopicBinding.mockRejectedValueOnce(new Error("settings write failed"));
+
+    await selectSessionById(ctx, deps(), "session-1", selectionOptions);
+
+    // A fresh topic would shadow a binding that still points at the old one.
+    expect(ctx.api.createForumTopic).not.toHaveBeenCalled();
+    expect(mocked.bindings.get("111:19")).toMatchObject({ sessionId: "session-1" });
+    expect(mocked.error).toHaveBeenCalled();
+    expect(mocked.attachToSession).toHaveBeenCalledTimes(1);
   });
 });

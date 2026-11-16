@@ -1,5 +1,6 @@
 import { logger } from "../../utils/logger.js";
 import { isTransientTelegramNetworkError } from "../../utils/telegram-rate-limit-retry.js";
+import { isTopicNotFoundError } from "../../utils/telegram-topic-error.js";
 import {
   resolveStreamThrottleMs,
   type StreamThrottleMs,
@@ -661,6 +662,14 @@ export class ToolCallStreamer {
         return true;
       } catch (error) {
         if (state.cancelled || error instanceof TelegramOperationCancelledError) {
+          return false;
+        }
+
+        // A deleted topic fails identically in plain text, so there is nothing to
+        // fall back to: the stream breaks and the delivery has already dropped
+        // the stale binding.
+        if (isTopicNotFoundError(error)) {
+          this.markStreamBroken(state, error, "topic_deleted");
           return false;
         }
 

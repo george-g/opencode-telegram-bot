@@ -18,6 +18,7 @@ export async function resetSingletonState(): Promise<void> {
     loggerModule,
     attachServiceModule,
     settingsModule,
+    topicRecoveryModule,
   ] = await Promise.all([
     import("../../src/opencode/events.js"),
     import("../../src/app/services/session-cache-service.js"),
@@ -37,6 +38,7 @@ export async function resetSingletonState(): Promise<void> {
     import("../../src/utils/logger.js"),
     import("../../src/app/services/attach-service.js"),
     import("../../src/app/stores/settings-store.js"),
+    import("../../src/bot/events/topic-binding-recovery.js"),
   ]);
 
   stopEventListening();
@@ -102,5 +104,14 @@ export async function resetSingletonState(): Promise<void> {
     typeof attachServiceModule.__resetAttachRestoreForTests === "function"
   ) {
     attachServiceModule.__resetAttachRestoreForTests();
+  }
+
+  // The dead-topic latch is per process: a test's removed binding must not
+  // suppress the removal the next test expects.
+  if (
+    "__resetDeadTopicLatchesForTests" in topicRecoveryModule &&
+    typeof topicRecoveryModule.__resetDeadTopicLatchesForTests === "function"
+  ) {
+    topicRecoveryModule.__resetDeadTopicLatchesForTests();
   }
 }
