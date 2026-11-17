@@ -249,6 +249,9 @@ export async function handleSessionSearchCallback(
       await failure(ctx, "sessions.select_error");
       return true;
     }
+    // The selection resets every scope once it lands, so the full-reset epoch tells the
+    // catch below whether the bot moved. Read before the try, as in the other pickers.
+    const resetEpochBefore = deps.interactionManager.getResetEpoch();
     try {
       await selectSessionById(ctx, deps, id, {
         source: "menu",
@@ -262,7 +265,14 @@ export async function handleSessionSearchCallback(
         await ctx.answerCallbackQuery().catch(() => {});
         return true;
       }
-      deps.resetInteractions("session_select_error");
+      // A landed selection resets every scope, so the full-reset epoch tells this catch
+      // whether the bot already moved. Before that the failure only touched this picker,
+      // and the catch drops this scope alone.
+      if (deps.interactionManager.getResetEpoch() === resetEpochBefore) {
+        deps.resetInteractions("session_select_error", scope);
+      } else {
+        deps.resetInteractions("session_select_error");
+      }
       logger.error("[Sessions] Error selecting session:", error);
       await failure(ctx, "sessions.select_error");
     }

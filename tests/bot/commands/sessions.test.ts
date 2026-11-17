@@ -441,6 +441,42 @@ describe("bot/commands/sessions", () => {
     expect(mocked.sessionGetMock).not.toHaveBeenCalled();
   });
 
+  it("drops only its own scope when a search-result selection fails before the switch", async () => {
+    const sessions = Array.from({ length: 3 }, (_, index) => createSession(index));
+    mocked.sessionListMock.mockResolvedValue({ data: sessions, error: null });
+    startInteractionForTest(container.interactionManager, {
+      kind: "custom",
+      expectedInput: "text",
+      metadata: { flow: "session-search", stage: "input", token: "test" },
+    }, SCOPE);
+
+    // The search sends its results and records the message id the result buttons hang off.
+    const text = { ...createCommandContext(), message: { text: "Session" } } as unknown as Context;
+    await handleSessionSearchTextInput(text, createDeps());
+
+    const otherScope = "111:42";
+    startInteractionForTest(container.interactionManager, {
+      kind: "inline",
+      expectedInput: "callback",
+      metadata: { menuKind: "session", messageId: 999 },
+    }, otherScope);
+    const otherGenerationBefore = container.interactionManager.getGeneration(otherScope);
+    // The fetch fails before any selection ran, so this picker's scope alone may be dropped.
+    mocked.sessionGetMock.mockRejectedValueOnce(new Error("server gone"));
+    const resetInteractions = vi.fn((reason: string, scope?: string) =>
+      container.interactionManager.reset(reason, scope),
+    );
+
+    const ctx = createCallbackContext("session:search:result:0", 456);
+    await handleSessionSearchCallback(ctx, { ...createDeps(), resetInteractions });
+
+    expect(resetInteractions).toHaveBeenCalledWith("session_select_error", SCOPE);
+    expect(container.interactionManager.isActive(SCOPE)).toBe(false);
+    // The failure never moved the bot, so the other topic keeps its prompt.
+    expect(container.interactionManager.isActive(otherScope)).toBe(true);
+    expect(container.interactionManager.getGeneration(otherScope)).toBe(otherGenerationBefore);
+  });
+
   it("caps the query at 100 characters in both the search and the heading", async () => {
     const longQuery = "x".repeat(140);
     mocked.sessionListMock.mockResolvedValue({ data: [], error: null });

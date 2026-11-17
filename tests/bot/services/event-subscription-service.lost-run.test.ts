@@ -368,6 +368,60 @@ describe("bot/services/event-subscription-service lost run", () => {
     expect(JSON.stringify(pollEdit)).toContain(t("question.not_answered"));
   });
 
+  it("closes a subagent's poll a topic-bound session keeps in the plain chat", async () => {
+    // A subagent holds no topic binding, so its poll goes to the plain chat and its slot
+    // to that chat's scope, while the followed root session is bound to a topic. The
+    // lookup has to check both scopes, or this run's poll is left on screen.
+    await registerTopicBinding({
+      chatId: 42,
+      threadId: 77,
+      sessionId: "session-1",
+      directory: "D:/repo",
+      topicName: "Feature work",
+    });
+    const topicScope = "42:77";
+    const otherTopicScope = "42:99";
+
+    container.questionManager.startQuestions(
+      [{ question: "Red or blue?", header: "Color", options: [{ label: "Red", description: "" }] }],
+      "form-root",
+      "session-1",
+      topicScope,
+    );
+    container.questionManager.addMessageId(703, topicScope);
+    container.questionManager.setActiveMessageId(703, topicScope);
+
+    container.questionManager.startQuestions(
+      [{ question: "Red or blue?", header: "Color", options: [{ label: "Red", description: "" }] }],
+      "form-child",
+      "child-session-1",
+      SCOPE,
+    );
+    container.questionManager.addMessageId(702, SCOPE);
+    container.questionManager.setActiveMessageId(702, SCOPE);
+
+    // A poll of another session in another topic: the lookup must leave it alone.
+    container.questionManager.startQuestions(
+      [{ question: "Red or blue?", header: "Color", options: [{ label: "Red", description: "" }] }],
+      "form-other",
+      "other-session",
+      otherTopicScope,
+    );
+    container.questionManager.addMessageId(704, otherTopicScope);
+    container.questionManager.setActiveMessageId(704, otherTopicScope);
+
+    const ending = service!.endRunLostWithServer("opencode_lost");
+    await settle();
+    await ending;
+
+    const childEdit = api.editMessageText.mock.calls.find((call) => call[1] === 702);
+    expect(container.questionManager.isActive(SCOPE)).toBe(false);
+    expect(JSON.stringify(childEdit)).toContain(t("question.not_answered"));
+    expect(container.questionManager.isActive(topicScope)).toBe(false);
+    expect(container.questionManager.isActive(otherTopicScope)).toBe(true);
+    expect(api.editMessageText).not.toHaveBeenCalledWith(42, 704, expect.anything());
+  });
+
   it("ends a running subagent card interrupted, timed to when the server went away", async () => {
     startSubagent(container);
     await settle();

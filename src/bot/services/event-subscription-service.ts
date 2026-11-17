@@ -4,10 +4,7 @@ import { config } from "../../config.js";
 import { opencodeServerVersion } from "../../opencode/client.js";
 import { getCurrentSession } from "../../app/services/session-service.js";
 import { getTopicBindingBySession } from "../../app/stores/topic-binding-store.js";
-import {
-  DEFAULT_INTERACTION_SCOPE,
-  interactionScopeFromDestination,
-} from "../../app/types/interaction-scope.js";
+import { interactionScopeFromDestination } from "../../app/types/interaction-scope.js";
 import { restorePendingInteractionsAfterReconnect } from "../../app/services/attach-service.js";
 import { reconcileInboxPrompts } from "../../app/services/prompt-inbox-service.js";
 import { logger } from "../../utils/logger.js";
@@ -204,19 +201,56 @@ class EventSubscriptionService implements BotEventSubscriptionService {
 
     const { deps, runtime } = this;
     const sessionId = getCurrentSession()?.id;
-    // The poll on screen belongs to the followed session. A session bound to a forum
-    // topic holds it under that topic's scope, so the lookup resolves the scope from
-    // the session's destination; an unbound session and a session-less run keep the
-    // plain chat the bot was started with.
-    const destination = sessionId ? this.getDestination(sessionId) : this.getChatDestination();
+    // The poll on screen belongs to the followed run. A session bound to a forum topic keeps
+    // its poll under that topic's scope; a subagent holds no binding of its own, so its poll
+    // goes to the plain chat and its slot to that chat's scope. Either scope can hold this
+    // run's poll, so look in both; an unbound session and a session-less run keep the plain
+    // chat the bot was started with.
+    const candidates = sessionId
+      ? [this.getDestination(sessionId), this.getChatDestination()]
+      : [this.getChatDestination()];
+    const checkedScopes = new Set<string>();
     // First: failing the poll's question call below would delete the poll, as after /abort.
-    const destinationScope = destination
-      ? interactionScopeFromDestination(destination)
-      : DEFAULT_INTERACTION_SCOPE;
-    const pollClosed =
-      destination && deps.questionManager.isActive(destinationScope)
-        ? closeQuestionNotAnswered(destination.api, destination.chatId, deps, destinationScope)
-        : Promise.resolve();
+    const pollClosings: { scope: string; closing: Promise<void> }[] = [];
+    for (const destination of candidates) {
+      if (!destination) {
+        continue;
+      }
+
+      const scope = interactionScopeFromDestination(destination);
+      if (checkedScopes.has(scope)) {
+        continue;
+      }
+      checkedScopes.add(scope);
+
+      // The lookup is bounded by chat and topic. A session check is deliberately absent: a
+      // subagent poll lives in `<chatId>:no-thread`, the same scope as the base chat, and a
+      // session check would skip it. The residual risk in that scope is accepted.
+      if (deps.questionManager.isActive(scope)) {
+        pollClosings.push({
+          scope,
+          closing: closeQuestionNotAnswered(destination.api, destination.chatId, deps, scope),
+        });
+      }
+    }
+    if (checkedScopes.size === 0) {
+      // No bot context: the poll is left on screen, and the log says why.
+      logger.warn("[Bot] No chat is set to close the lost run's poll in; it stays on screen");
+    }
+    // One failing close must not hide the others, and it must not escape to the caller.
+    const pollClosed = Promise.allSettled(pollClosings.map((entry) => entry.closing)).then(
+      (results) => {
+        results.forEach((result, index) => {
+          const entry = pollClosings[index];
+          if (result.status === "rejected" && entry) {
+            logger.warn(
+              `[Bot] Failed to close the lost run's poll in scope ${entry.scope}:`,
+              result.reason,
+            );
+          }
+        });
+      },
+    );
 
     // The server took every session's background commands with it.
     this.stopBackgroundCommands(reason);
